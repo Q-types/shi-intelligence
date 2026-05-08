@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Sequence
 from collections import deque
 
 import numpy as np

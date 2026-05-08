@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Sequence
 
 import numpy as np
 import structlog
 
-from ..core.types import TokenBalance, HolderSnapshot, WalletAddress
+from ..core.types import HolderSnapshot
 from ..graph import FundingGraph, compute_graph_features
 from ..clustering.archetypes import WalletFeatureVector
 
@@ -292,9 +291,9 @@ class FeatureEngineer:
             delta = (trades[i] - trades[i - 1]).total_seconds()
             intervals.append(delta)
 
-        intervals = np.array(intervals)
-        mu = np.mean(intervals)
-        sigma = np.std(intervals)
+        intervals_arr = np.array(intervals)
+        mu = float(np.mean(intervals_arr))
+        sigma = float(np.std(intervals_arr))
 
         # Burstiness per PDR Section 3.2:
         # B = (sigma - mu) / (sigma + mu)

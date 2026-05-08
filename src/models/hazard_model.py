@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
 import structlog
 from lifelines import CoxPHFitter
@@ -159,6 +158,8 @@ class HazardModelTrainer:
         errors = []
 
         # Concordance index
+        if self._fitter is None:
+            raise ValueError("Model not fitted")
         concordance = self._fitter.concordance_index_
 
         # Proportional hazards test (Schoenfeld residuals)
@@ -182,10 +183,11 @@ class HazardModelTrainer:
 
         # Coefficient stability (check for extreme values)
         coef_stability = {}
-        for name, coef in self._fitter.params_.items():
-            coef_stability[name] = float(abs(coef))
-            if abs(coef) > 5:
-                errors.append(f"Extreme coefficient for {name}: {coef:.2f}")
+        if self._fitter is not None:
+            for name, coef in self._fitter.params_.items():
+                coef_stability[name] = float(abs(coef))
+                if abs(coef) > 5:
+                    errors.append(f"Extreme coefficient for {name}: {coef:.2f}")
 
         # Brier score (placeholder - would need test set)
         brier_score = 0.0  # TODO: Implement with test set
@@ -255,7 +257,6 @@ class HazardModelPredictor:
         ci_half = 1.96 * np.sqrt(var_linear_pred)
 
         # Transform to probability scale
-        linear_pred = float(self._fitter.predict_partial_hazard(features).iloc[0])
         ci_lower = max(0, sell_prob - ci_half * sell_prob)
         ci_upper = min(1, sell_prob + ci_half * sell_prob)
 
@@ -298,7 +299,7 @@ def validate_proportional_hazards(
     """
     logger.info("validating_ph_assumption")
 
-    results = {
+    results: dict[str, Any] = {
         "schoenfeld_test": None,
         "residual_plots_data": None,
         "assumption_holds": False,
@@ -319,9 +320,9 @@ def validate_proportional_hazards(
         }
 
         # Check if assumption holds (p > 0.05 for all covariates)
-        results["assumption_holds"] = all(
+        results["assumption_holds"] = bool(all(
             p > 0.05 for p in ph_test.summary["p"]
-        )
+        ))
 
         # Get residual data for plotting
         results["residual_plots_data"] = {

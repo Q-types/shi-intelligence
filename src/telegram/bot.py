@@ -7,30 +7,23 @@ Integrates with security middleware for comprehensive protection.
 
 from __future__ import annotations
 
-import asyncio
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Callable, Awaitable
 
 import structlog
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import (
     Application,
-    CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 from ..core.config import settings
 from .security import (
     SecurityMiddleware,
     SecurityConfig,
-    AuditLogger,
     UserRole,
 )
-from ..infra.rate_limit import RateLimiter as InfraRateLimiter, RateLimitConfig
-from ..infra.monitoring import get_metrics, get_health_checker, record_request
+from ..infra.monitoring import get_metrics
 
 logger = structlog.get_logger()
 

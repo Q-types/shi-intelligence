@@ -17,11 +17,12 @@ This is holder structure regime detection.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Sequence
 
 import numpy as np
+import numpy.typing as npt
 from hmmlearn import hmm
 import structlog
 
@@ -106,7 +107,7 @@ class HolderRegimeDetector:
 
     def fit(
         self,
-        training_sequences: Sequence[np.ndarray],
+        training_sequences: Sequence[npt.NDArray[np.float64]],
         lengths: Optional[Sequence[int]] = None,
     ) -> None:
         """
@@ -173,7 +174,7 @@ class HolderRegimeDetector:
 
     def predict_regime(
         self,
-        features: np.ndarray,
+        features: npt.NDArray[np.float64],
     ) -> RegimeState:
         """
         Predict regime from feature vector.
@@ -216,7 +217,7 @@ class HolderRegimeDetector:
             regime=regime,
             confidence=confidence,
             transition_probability=transition_prob,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             dhhi_dt=dhhi_dt,
             dgini_dt=dgini_dt,
             dchurn_dt=dchurn_dt,
@@ -224,7 +225,7 @@ class HolderRegimeDetector:
 
     def detect_transitions(
         self,
-        features: np.ndarray,
+        features: npt.NDArray[np.float64],
         timestamps: Sequence[datetime],
     ) -> list[RegimeTransition]:
         """
@@ -268,7 +269,7 @@ class HolderRegimeDetector:
         gini_traj: MetricTrajectory,
         churn_traj: Optional[MetricTrajectory] = None,
         coordination_score: float = 0.0,
-    ) -> np.ndarray:
+    ) -> npt.NDArray[np.float64]:
         """
         Extract HMM features from metric trajectories.
 

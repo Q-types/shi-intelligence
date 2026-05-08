@@ -14,12 +14,12 @@ This module only adds temporal tracking on top of those metrics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import numpy as np
-from scipy.interpolate import interp1d
+import numpy.typing as npt
 from scipy.ndimage import uniform_filter1d
 import structlog
 
@@ -160,13 +160,13 @@ class TrajectoryTracker:
             min_value=min_val,
             max_value=max_val,
             window_days=window_days or int(timestamps[-1] - timestamps[0]) + 1,
-            computed_at=datetime.utcnow(),
+            computed_at=datetime.now(timezone.utc),
         )
 
     def _compute_velocity(
         self,
-        timestamps: np.ndarray,
-        values: np.ndarray,
+        timestamps: npt.NDArray[np.float64],
+        values: npt.NDArray[np.float64],
     ) -> float:
         """
         Compute first derivative (velocity) using finite differences.
@@ -202,8 +202,8 @@ class TrajectoryTracker:
 
     def _compute_acceleration(
         self,
-        timestamps: np.ndarray,
-        values: np.ndarray,
+        timestamps: npt.NDArray[np.float64],
+        values: npt.NDArray[np.float64],
     ) -> float:
         """
         Compute second derivative (acceleration).
@@ -234,7 +234,7 @@ class TrajectoryTracker:
 
     def _detect_trend(
         self,
-        values: np.ndarray,
+        values: npt.NDArray[np.float64],
         velocity: float,
         std: float,
     ) -> TrendDirection:
@@ -269,7 +269,7 @@ class TrajectoryTracker:
 
     def compute_multi_metric_trajectory(
         self,
-        snapshots: Sequence[dict],
+        snapshots: Sequence[dict[str, Any]],
         metrics: list[str] = ["hhi", "gini", "churn_rate", "whale_dominance"],
         window_days: Optional[int] = 30,
     ) -> dict[str, MetricTrajectory]:
@@ -321,7 +321,7 @@ class TrajectoryTracker:
         hhi_trajectory: MetricTrajectory,
         gini_trajectory: MetricTrajectory,
         churn_trajectory: Optional[MetricTrajectory] = None,
-    ) -> dict[str, any]:
+    ) -> dict[str, Any]:
         """
         Extract regime signals from metric trajectories.
 

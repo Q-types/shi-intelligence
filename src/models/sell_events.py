@@ -15,10 +15,8 @@ Default parameters:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
-from typing import Iterator
+from datetime import datetime, timezone
 
-import numpy as np
 import structlog
 
 from ..core.config import settings
@@ -96,7 +94,6 @@ class SellEventDetector:
 
         # Track rolling peak
         rolling_peak = 0
-        peak_time = snapshots[0][0]
         entry_time = None
 
         for ts, balance in snapshots:
@@ -107,7 +104,6 @@ class SellEventDetector:
             # Update rolling peak
             if balance > rolling_peak:
                 rolling_peak = balance
-                peak_time = ts
 
             # Check for sell event
             if rolling_peak > 0:

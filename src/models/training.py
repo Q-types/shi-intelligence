@@ -18,15 +18,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
-import json
 
 import numpy as np
 import pandas as pd
 import structlog
 from lifelines import CoxPHFitter
 from lifelines.statistics import proportional_hazard_test
-from sklearn.model_selection import KFold, TimeSeriesSplit
+from sklearn.model_selection import KFold
 
 from .sell_events import SellEvent
 from .hazard_model import TrainedHazardModel, ModelValidationResult

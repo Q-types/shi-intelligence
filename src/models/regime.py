@@ -13,7 +13,7 @@ Crypto markets are non-stationary. The system must:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Sequence
 
@@ -258,15 +258,16 @@ class RegimeAwareRetrainer:
             days_since = (current_time - self._last_retrain).days
             if days_since < self.min_days_between:
                 return False, f"Too soon (last retrain {days_since}d ago)"
+            days_since_float: float = float(days_since)
         else:
-            days_since = float("inf")
+            days_since_float = float("inf")
 
         # Check regime-triggered retraining
         if regime_state.trigger_retraining:
             return True, f"Regime shift to {regime_state.regime.value}"
 
         # Check max interval
-        if days_since > self.max_days_without:
+        if days_since_float > self.max_days_without:
             return True, f"Scheduled retraining ({days_since}d since last)"
 
         return False, "No retraining needed"

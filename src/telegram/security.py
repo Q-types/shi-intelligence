@@ -8,7 +8,6 @@ and audit logging for the Telegram interface.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import time
 from dataclasses import dataclass, field
@@ -354,7 +353,7 @@ class AbuseDetector:
             # Check rate limits
             requests_last_minute = sum(1 for t in requests if t > minute_ago)
             if requests_last_minute >= self.config.max_requests_per_minute:
-                return False, f"Rate limit exceeded. Please wait a moment."
+                return False, "Rate limit exceeded. Please wait a moment."
 
             requests_last_hour = len(requests)
             if requests_last_hour >= self.config.max_requests_per_hour:
@@ -521,7 +520,7 @@ class SecurityMiddleware:
             await self.audit_logger.log(
                 user_id, username, command, args_or_error, success=False, error=abuse_warning
             )
-            return abuse_warning
+            return abuse_warning or "Rate limit exceeded"
 
         # Execute handler
         try:

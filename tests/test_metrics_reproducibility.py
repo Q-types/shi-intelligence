@@ -147,7 +147,8 @@ class TestMetricsKnownValues:
         # Using small values instead
         balances = [1000000.0] + [1.0] * 99
         result = compute_gini_coefficient(balances)
-        assert result.value > 0.99
+        # Gini approaches but doesn't exactly reach 1 with finite holders
+        assert result.value > 0.98
 
 
 class TestChecksumConsistency:
@@ -157,10 +158,12 @@ class TestChecksumConsistency:
     def sample_snapshot(self) -> HolderSnapshot:
         """Create sample holder snapshot."""
         now = datetime.now(timezone.utc)
+        # Base58 alphabet (no 0, I, O, l)
+        base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
         balances = [
             TokenBalance(
-                wallet=f"wallet{i}" + "x" * 35,  # Pad to valid length
-                mint="mint" + "x" * 40,
+                wallet=f"wa11et{base58[i % len(base58)]}" + "1" * 25,  # 32 chars, valid base58
+                mint="mint1111111111111111111111111111111111",  # 38 chars, valid base58
                 balance=1000 * (100 - i),
                 decimals=9,
                 timestamp=now,
@@ -168,7 +171,7 @@ class TestChecksumConsistency:
             for i in range(10)
         ]
         return HolderSnapshot(
-            mint="mint" + "x" * 40,
+            mint="mint1111111111111111111111111111111111",  # 38 chars, valid base58
             timestamp=now,
             total_supply=sum(b.balance for b in balances),
             holder_count=len(balances),
@@ -229,15 +232,15 @@ class TestVersionTracking:
         now = datetime.now(timezone.utc)
         balances = [
             TokenBalance(
-                wallet="wallet" + "x" * 38,
-                mint="mint" + "x" * 40,
+                wallet="wa11et1111111111111111111111111111",  # 34 chars, valid base58
+                mint="mint1111111111111111111111111111111111",  # 38 chars, valid base58
                 balance=1000,
                 decimals=9,
                 timestamp=now,
             )
         ]
         snapshot = HolderSnapshot(
-            mint="mint" + "x" * 40,
+            mint="mint1111111111111111111111111111111111",  # 38 chars, valid base58
             timestamp=now,
             total_supply=1000,
             holder_count=1,

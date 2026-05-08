@@ -65,7 +65,6 @@ async def run_analysis(mint: str) -> None:
         compute_gini_coefficient,
         compute_whale_dominance_ratio,
     )
-    from .graph import FundingGraph
 
     logger.info("running_analysis", mint=mint)
 

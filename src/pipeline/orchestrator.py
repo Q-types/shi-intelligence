@@ -22,13 +22,13 @@ from typing import Any
 import structlog
 
 from ..core.config import settings
-from ..core.types import TokenMint, HolderSnapshot
+from ..core.types import TokenMint
 from ..data.client import SolanaDataClient
 from ..graph import FundingGraph, detect_communities, find_shared_funders
-from ..clustering import cluster_wallets, Archetype
+from ..clustering import cluster_wallets
 from ..risk.scoring import RiskReport, generate_risk_report
 from ..metrics.normalization import BaselineStatistics
-from .features import FeatureEngineer, TemporalContext
+from .features import FeatureEngineer
 from .metrics_pipeline import MetricsPipeline, MetricsResult
 
 logger = structlog.get_logger()
@@ -123,7 +123,6 @@ class AnalysisOrchestrator:
         start_time = datetime.now(timezone.utc)
         timeout = timeout or self._timeout
         warnings: list[str] = []
-        is_partial = False
 
         logger.info("analysis_started", mint=mint, timeout=timeout)
 
@@ -226,8 +225,8 @@ class AnalysisOrchestrator:
         # Placeholder sell probabilities (would come from hazard model)
         top_holder_sell_probs = [0.1] * min(10, len(features))
 
-        # Build metrics dict for risk report
-        metrics_dict = {
+        # Build metrics dict for risk report (filter None values)
+        metrics_dict: dict[str, MetricOutput] = {
             "hhi": metrics.hhi,
             "entropy": metrics.shannon_entropy,
             "gini": metrics.gini_coefficient,
@@ -239,7 +238,7 @@ class AnalysisOrchestrator:
 
         risk_report = generate_risk_report(
             mint=mint,
-            metrics=metrics_dict,
+            metrics={k: v for k, v in metrics_dict.items() if v is not None},
             sell_probabilities=top_holder_sell_probs,
             baseline=self.baseline,
             liquidity_depth=None,  # Would need DEX data
@@ -293,12 +292,16 @@ class AnalysisOrchestrator:
 
         # Try to get at least basic holder info
         try:
-            snapshot = await asyncio.wait_for(
-                self.data_client.get_token_holders(mint, limit=100),
-                timeout=5.0,
-            )
-            holder_count = snapshot.holder_count
-            total_supply = snapshot.total_supply
+            if self.data_client:
+                snapshot = await asyncio.wait_for(
+                    self.data_client.get_token_holders(mint, limit=100),
+                    timeout=5.0,
+                )
+                holder_count = snapshot.holder_count
+                total_supply = snapshot.total_supply
+            else:
+                holder_count = 0
+                total_supply = 0
         except Exception:
             holder_count = 0
             total_supply = 0

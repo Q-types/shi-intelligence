@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 
-from src.core.types import TokenBalance, HolderSnapshot, WalletAddress
+from src.core.types import TokenBalance, HolderSnapshot
 
 
 @pytest.fixture

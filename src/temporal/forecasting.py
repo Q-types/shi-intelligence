@@ -10,10 +10,11 @@ For production, integrate ARIMA, VAR, or LSTM models.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Optional, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, Sequence
 
 import numpy as np
+import numpy.typing as npt
 from scipy import stats
 import structlog
 
@@ -84,7 +85,7 @@ class CapitalFlowForecaster:
         """
         self.lookback_hours = lookback_hours
         self.confidence_level = confidence_level
-        self._coefficients: Optional[np.ndarray] = None
+        self._coefficients: Optional[npt.NDArray[np.float64]] = None
         self._intercept: float = 0.0
         self._residual_std: float = 1.0
 
@@ -193,7 +194,7 @@ class CapitalFlowForecaster:
             confidence_interval_lower=ci_lower,
             confidence_interval_upper=ci_upper,
             horizon_hours=horizon_hours,
-            forecast_timestamp=datetime.utcnow(),
+            forecast_timestamp=datetime.now(timezone.utc),
             liquidity_stress_probability=stress_prob,
             top_features=top_features,
         )
@@ -201,7 +202,7 @@ class CapitalFlowForecaster:
     def _features_to_matrix(
         self,
         features: Sequence[FlowFeatures],
-    ) -> np.ndarray:
+    ) -> npt.NDArray[np.float64]:
         """Convert FlowFeatures to matrix."""
         rows = []
         for f in features:
@@ -225,7 +226,7 @@ class CapitalFlowForecaster:
 
 
 def extract_flow_features_from_snapshots(
-    snapshots: Sequence[dict],
+    snapshots: Sequence[dict[str, Any]],
     lookback_hours: int = 24,
 ) -> Optional[FlowFeatures]:
     """

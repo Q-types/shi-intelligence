@@ -21,11 +21,10 @@ import matplotlib.pyplot as plt
 from rich.console import Console
 from rich.table import Table
 
-from src.temporal.trajectories import TrajectoryTracker, MetricPoint
+from src.temporal.trajectories import TrajectoryTracker
 from src.temporal.regimes import HolderRegimeDetector, create_rule_based_regime
 from src.temporal.forecasting import (
     CapitalFlowForecaster,
-    FlowFeatures,
     extract_flow_features_from_snapshots,
 )
 
@@ -175,7 +174,7 @@ def demo_regime_detection(trajectories):
     for regime_type in ["distribution", "accumulation", "decay"]:
         train_snapshots = generate_synthetic_token_data(40, regime_type=regime_type)
         train_tracker = TrajectoryTracker()
-        train_trajs = train_tracker.compute_multi_metric_trajectory(train_snapshots)
+        train_tracker.compute_multi_metric_trajectory(train_snapshots)
 
         # Extract features
         features = []
@@ -249,7 +248,7 @@ def demo_capital_flow_forecasting():
     if features:
         forecast = forecaster.forecast(features, horizon_hours=24)
 
-        console.print(f"\n[bold]24-Hour Capital Flow Forecast:[/bold]")
+        console.print("\n[bold]24-Hour Capital Flow Forecast:[/bold]")
         console.print(f"  Predicted Net Flow: {forecast.predicted_net_flow:.2f}")
         console.print(
             f"  95% CI: [{forecast.confidence_interval_lower:.2f}, "
@@ -259,7 +258,7 @@ def demo_capital_flow_forecasting():
             f"  Liquidity Stress Probability: {forecast.liquidity_stress_probability:.2%}"
         )
 
-        console.print(f"\n[bold]Top Contributing Features:[/bold]")
+        console.print("\n[bold]Top Contributing Features:[/bold]")
         for feature, importance in forecast.top_features.items():
             console.print(f"  {feature}: {importance:.4f}")
 

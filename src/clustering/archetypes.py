@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -232,7 +231,7 @@ def assign_archetype(features: WalletFeatureVector) -> ArchetypeAssignment:
                 confidence=confidence,
                 matching_features=matching,
                 feature_values={
-                    f: getattr(features, f, None)
+                    f: float(getattr(features, f, 0.0))
                     for f in definition.required_features
                     if hasattr(features, f)
                 },
@@ -306,7 +305,6 @@ def cluster_wallets(
             # Mark coordinated clusters
             for i, features in enumerate(shared_funder_wallets):
                 if cluster_labels[i] >= 0:  # Not noise
-                    current = assignments[features.wallet]
                     # Override with coordinated cluster if confidence is high
                     if features.shared_funder_count >= 2:
                         assignments[features.wallet] = ArchetypeAssignment(
@@ -323,7 +321,7 @@ def cluster_wallets(
             logger.info(
                 "coordinated_clusters_detected",
                 cluster_count=len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0),
-                noise_count=sum(1 for l in cluster_labels if l == -1),
+                noise_count=sum(1 for label in cluster_labels if label == -1),
             )
 
         except ImportError:

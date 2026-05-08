@@ -11,13 +11,13 @@ import asyncio
 import functools
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import (
+    Any,
     Callable,
     TypeVar,
     Awaitable,
     Type,
-    Sequence,
 )
 
 import structlog
@@ -234,7 +234,7 @@ def retry_with_backoff(
         ConnectionError,
         TimeoutError,
     ),
-):
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """
     Decorator for retry with exponential backoff.
 
@@ -254,7 +254,7 @@ def retry_with_backoff(
         policy = RetryPolicy(config)
 
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> T:
+        async def wrapper(*args: Any, **kwargs: Any) -> T:
             return await policy.execute(
                 lambda: func(*args, **kwargs),
                 operation_name=func.__name__,
@@ -270,7 +270,7 @@ class DeadLetterEntry:
     """Entry in the dead letter queue."""
 
     operation: str
-    payload: dict
+    payload: dict[str, Any]
     error: str
     attempts: int
     created_at: float
@@ -292,7 +292,7 @@ class DeadLetterQueue:
     async def add(
         self,
         operation: str,
-        payload: dict,
+        payload: dict[str, Any],
         error: str,
         attempts: int,
     ) -> None:

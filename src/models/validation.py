@@ -17,9 +17,8 @@ No model deploys without passing validation thresholds.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -29,11 +28,8 @@ from sklearn.metrics import (
     brier_score_loss,
     roc_auc_score,
     roc_curve,
-    precision_recall_curve,
 )
-from sklearn.model_selection import TimeSeriesSplit
 from lifelines import CoxPHFitter
-from lifelines.utils import concordance_index
 
 logger = structlog.get_logger()
 
@@ -229,8 +225,8 @@ class ModelValidator:
             brier_score=brier,
             roc_auc=roc_auc,
             cv_scores=cv_scores,
-            cv_mean=cv_mean,
-            cv_std=cv_std,
+            cv_mean=float(cv_mean),
+            cv_std=float(cv_std),
             temporal_concordance=temporal_concordance,
             calibration=calibration,
             roc=roc_result,

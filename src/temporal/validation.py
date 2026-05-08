@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Optional, Sequence, TypeVar
+from typing import Callable, Sequence, TypeVar
 
 import numpy as np
+import numpy.typing as npt
 import structlog
 
 from .regimes import HolderRegimeDetector, HolderRegimeType
@@ -42,8 +43,8 @@ class ValidationResult:
     window_id: int
     metric_name: str
     score: float
-    predictions: np.ndarray
-    actuals: np.ndarray
+    predictions: npt.NDArray[np.float64]
+    actuals: npt.NDArray[np.float64]
     train_size: int
     test_size: int
 
@@ -152,7 +153,7 @@ class WalkForwardValidator:
     def validate_regime_detector(
         self,
         detector: HolderRegimeDetector,
-        features: np.ndarray,
+        features: npt.NDArray[np.float64],
         timestamps: Sequence[datetime],
         true_regimes: Sequence[HolderRegimeType],
     ) -> WalkForwardResults:
@@ -249,8 +250,8 @@ class WalkForwardValidator:
 
     def validate_forecaster(
         self,
-        forecast_fn: Callable[[np.ndarray, int], np.ndarray],
-        time_series: np.ndarray,
+        forecast_fn: Callable[[npt.NDArray[np.float64], int], npt.NDArray[np.float64]],
+        time_series: npt.NDArray[np.float64],
         timestamps: Sequence[datetime],
         horizon: int = 1,
     ) -> WalkForwardResults:
@@ -367,8 +368,8 @@ def compute_regime_detection_metrics(
     )
 
     return {
-        "accuracy": accuracy,
-        "precision": macro_precision,
-        "recall": macro_recall,
-        "f1": f1,
+        "accuracy": float(accuracy),
+        "precision": float(macro_precision),
+        "recall": float(macro_recall),
+        "f1": float(f1),
     }

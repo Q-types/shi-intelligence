@@ -221,7 +221,7 @@ async def rpc_health_check(rpc_url: str) -> HealthStatus:
             return HealthStatus(
                 name="solana_rpc",
                 state=HealthState.DEGRADED,
-                message=f"RPC returned non-ok status",
+                message="RPC returned non-ok status",
                 latency_ms=latency,
             )
     except Exception as e:

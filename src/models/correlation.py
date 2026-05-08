@@ -19,7 +19,6 @@ from typing import Sequence
 import numpy as np
 import structlog
 
-from ..clustering.archetypes import Archetype
 
 logger = structlog.get_logger()
 
@@ -252,8 +251,8 @@ def detect_coordinated_behavior(
         return 0.0
 
     # Compute coefficient of variation
-    mean_interval = np.mean(intervals)
-    std_interval = np.std(intervals)
+    mean_interval = float(np.mean(intervals))
+    std_interval = float(np.std(intervals))
 
     if mean_interval == 0:
         return 1.0  # All entries at same time = perfect sync
@@ -262,7 +261,7 @@ def detect_coordinated_behavior(
 
     # Lower CV = more synchronized
     # Convert to [0, 1] score where 1 = highly synchronized
-    window_seconds = temporal_window_hours * 3600
+    window_seconds = float(temporal_window_hours * 3600)
 
     if mean_interval < window_seconds:
         # Entries are within the window

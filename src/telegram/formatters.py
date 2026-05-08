@@ -7,8 +7,10 @@ Mobile-optimized, concise output.
 
 from __future__ import annotations
 
+from typing import Any
 
-def format_risk_report(report: dict) -> str:
+
+def format_risk_report(report: dict[str, Any]) -> str:
     """
     Format full risk report for Telegram.
 
@@ -64,7 +66,7 @@ _Not trading advice._
     return msg.strip()
 
 
-def format_holder_summary(data: dict) -> str:
+def format_holder_summary(data: dict[str, Any]) -> str:
     """Format top holder breakdown."""
     mint = data["mint"]
     holders = data["top_holders"]
@@ -91,7 +93,7 @@ def format_holder_summary(data: dict) -> str:
     return "\n".join(lines)
 
 
-def format_quick_summary(data: dict) -> str:
+def format_quick_summary(data: dict[str, Any]) -> str:
     """Format 3-line quick summary."""
     mint = data["mint"]
     holders = data["holder_count"]

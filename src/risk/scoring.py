@@ -292,7 +292,6 @@ def generate_risk_report(
 
     # Normalize metrics against baseline
     hhi_norm = baseline.normalize("hhi", metrics["hhi"].value)
-    entropy_norm = baseline.normalize("shannon_entropy", metrics["entropy"].value)
     gini_norm = baseline.normalize("gini_coefficient", metrics["gini"].value)
     wdr_norm = baseline.normalize("whale_dominance_ratio", metrics["wdr"].value)
     churn_norm = baseline.normalize("churn_rate", metrics["churn"].value)

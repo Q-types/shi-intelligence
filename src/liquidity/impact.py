@@ -14,7 +14,7 @@ import math
 
 import structlog
 
-from .pools import PoolInfo, LiquidityFetcher
+from .pools import LiquidityFetcher
 from ..core.types import TokenMint
 
 logger = structlog.get_logger()

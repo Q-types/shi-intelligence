@@ -9,8 +9,8 @@ Builds directed graph G=(V,E) where:
 from __future__ import annotations
 
 import pickle
-from datetime import datetime
-from typing import Iterator, Set
+from datetime import datetime, timezone
+from typing import Set
 
 import networkx as nx
 import structlog
@@ -30,7 +30,7 @@ class FundingGraph:
     def __init__(self):
         self._graph: nx.DiGraph = nx.DiGraph()
         self._wallet_set: Set[str] = set()
-        self._created_at = datetime.utcnow()
+        self._created_at = datetime.now(timezone.utc)
 
     @property
     def num_vertices(self) -> int:

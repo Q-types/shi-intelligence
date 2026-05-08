@@ -14,7 +14,7 @@ from pathlib import Path
 
 def load_env_file(path: Path) -> dict[str, str]:
     """Load .env file into dictionary."""
-    env_vars = {}
+    env_vars: dict[str, str] = {}
     if not path.exists():
         return env_vars
 

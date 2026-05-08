@@ -6,11 +6,10 @@ All types are immutable and validated.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Annotated, NewType
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from pydantic.functional_validators import AfterValidator
 
 # Base58 alphabet for Solana addresses

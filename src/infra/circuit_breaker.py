@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, TypeVar, Awaitable, Generic
+from typing import Any, Callable, TypeVar, Awaitable, Generic
 
 import structlog
 
@@ -275,22 +275,22 @@ class CircuitBreaker(Generic[T]):
 class CircuitBreakerRegistry:
     """Registry for managing multiple circuit breakers."""
 
-    def __init__(self):
-        self._breakers: dict[str, CircuitBreaker] = {}
+    def __init__(self) -> None:
+        self._breakers: dict[str, CircuitBreaker[Any]] = {}
         self._lock = asyncio.Lock()
 
     async def get_or_create(
         self,
         name: str,
         config: CircuitBreakerConfig | None = None,
-    ) -> CircuitBreaker:
+    ) -> CircuitBreaker[Any]:
         """Get existing or create new circuit breaker."""
         async with self._lock:
             if name not in self._breakers:
                 self._breakers[name] = CircuitBreaker(name, config)
             return self._breakers[name]
 
-    async def get_all_stats(self) -> dict[str, dict]:
+    async def get_all_stats(self) -> dict[str, dict[str, Any]]:
         """Get statistics for all circuit breakers."""
         async with self._lock:
             return {
@@ -313,6 +313,6 @@ _registry = CircuitBreakerRegistry()
 async def get_circuit_breaker(
     name: str,
     config: CircuitBreakerConfig | None = None,
-) -> CircuitBreaker:
+) -> CircuitBreaker[Any]:
     """Get circuit breaker from global registry."""
     return await _registry.get_or_create(name, config)
