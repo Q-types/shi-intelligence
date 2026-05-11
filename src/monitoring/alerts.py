@@ -3,14 +3,16 @@ Alert Engine for SHI.
 
 Manages alert generation, configuration, and delivery tracking.
 Supports whale_movement, regime_change, and anomaly_spike alerts.
+Includes WebSocket broadcasting for real-time delivery.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Callable, Coroutine, Dict, List, Optional, Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +22,9 @@ from ..temporal.regimes import HolderRegimeType
 from .watcher import BalanceChange
 
 logger = structlog.get_logger()
+
+# Type alias for alert broadcast callback
+AlertBroadcastCallback = Callable[[Any], Coroutine[Any, Any, int]]
 
 
 class AlertType(Enum):
@@ -147,12 +152,14 @@ class AlertEngine:
 
     Manages alert rules, cooldown periods, and delivery tracking.
     Integrates with WalletWatcher and regime/anomaly detectors.
+    Supports WebSocket broadcasting for real-time delivery.
     """
 
     def __init__(
         self,
         db_session: AsyncSession,
         default_cooldown: int = 60,  # minutes
+        broadcast_callback: Optional[AlertBroadcastCallback] = None,
     ):
         """
         Initialize alert engine.
@@ -160,10 +167,62 @@ class AlertEngine:
         Args:
             db_session: Database session
             default_cooldown: Default cooldown period in minutes
+            broadcast_callback: Optional callback for broadcasting alerts (e.g., WebSocket)
         """
         self.db_session = db_session
         self.default_cooldown = default_cooldown
         self._alert_history: Dict[str, datetime] = {}  # For cooldown tracking
+        self._broadcast_callback = broadcast_callback
+        self._broadcast_stats = {
+            "total_broadcasts": 0,
+            "successful_deliveries": 0,
+            "failed_deliveries": 0,
+        }
+
+    def set_broadcast_callback(self, callback: AlertBroadcastCallback) -> None:
+        """
+        Set the broadcast callback for real-time alert delivery.
+
+        Args:
+            callback: Async function that takes an Alert and returns delivery count
+        """
+        self._broadcast_callback = callback
+        logger.info("broadcast_callback_configured")
+
+    async def _broadcast_alert(self, alert: Alert) -> int:
+        """
+        Broadcast an alert via the configured callback.
+
+        Args:
+            alert: Alert to broadcast
+
+        Returns:
+            Number of recipients that received the alert
+        """
+        if not self._broadcast_callback:
+            return 0
+
+        try:
+            recipients = await self._broadcast_callback(alert)
+            self._broadcast_stats["total_broadcasts"] += 1
+            self._broadcast_stats["successful_deliveries"] += recipients
+
+            logger.info(
+                "alert_broadcast",
+                alert_type=alert.alert_type.value,
+                recipients=recipients,
+            )
+
+            return recipients
+
+        except Exception as e:
+            self._broadcast_stats["failed_deliveries"] += 1
+            logger.error("alert_broadcast_failed", error=str(e))
+            return 0
+
+    def get_broadcast_stats(self) -> Dict[str, int]:
+        """Get broadcast statistics."""
+        return self._broadcast_stats.copy()
 
     def _get_cooldown_key(
         self,
@@ -285,6 +344,9 @@ class AlertEngine:
             pct_of_supply=balance_change.pct_of_supply,
         )
 
+        # Broadcast via WebSocket
+        await self._broadcast_alert(alert)
+
         return alert
 
     async def create_regime_change_alert(
@@ -349,6 +411,9 @@ class AlertEngine:
             confidence=confidence,
         )
 
+        # Broadcast via WebSocket
+        await self._broadcast_alert(alert)
+
         return alert
 
     async def create_anomaly_spike_alert(
@@ -408,6 +473,9 @@ class AlertEngine:
             anomaly_count=anomaly_count,
             severity=severity.value,
         )
+
+        # Broadcast via WebSocket
+        await self._broadcast_alert(alert)
 
         return alert
 
@@ -472,6 +540,9 @@ class AlertEngine:
             hhi_change=hhi_change,
             severity=severity.value,
         )
+
+        # Broadcast via WebSocket
+        await self._broadcast_alert(alert)
 
         return alert
 

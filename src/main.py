@@ -3,6 +3,7 @@ Main entry point for Solana Holder Intelligence.
 
 Usage:
     python -m src.main --mode bot      # Run Telegram bot
+    python -m src.main --mode api      # Run API server with WebSocket
     python -m src.main --mode analyze  # Run single analysis
 """
 
@@ -56,6 +57,29 @@ async def run_bot() -> None:
         await bot.stop()
 
 
+async def run_api(host: str = "0.0.0.0", port: int = 8000) -> None:
+    """Run the FastAPI server with WebSocket support."""
+    import uvicorn
+    from .api.routes import app
+    from .api.websocket import ws_manager
+    from .monitoring.alerts import AlertEngine
+
+    logger.info("starting_shi_api", host=host, port=port)
+
+    # Configure alert engine with WebSocket broadcast
+    # In production, this would use a real database session
+    # For now, we just demonstrate the wiring
+
+    config = uvicorn.Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 async def run_analysis(mint: str) -> None:
     """Run single token analysis."""
     from .data.client import SolanaDataClient
@@ -104,14 +128,26 @@ def main() -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=["bot", "analyze"],
+        choices=["bot", "api", "analyze"],
         default="bot",
-        help="Run mode: bot (Telegram) or analyze (single token)",
+        help="Run mode: bot (Telegram), api (REST/WebSocket server), or analyze (single token)",
     )
     parser.add_argument(
         "--mint",
         type=str,
         help="Token mint address (required for analyze mode)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="API server host (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="API server port (default: 8000)",
     )
     parser.add_argument(
         "--debug",
@@ -127,6 +163,8 @@ def main() -> None:
 
     if args.mode == "bot":
         asyncio.run(run_bot())
+    elif args.mode == "api":
+        asyncio.run(run_api(host=args.host, port=args.port))
     elif args.mode == "analyze":
         if not args.mint:
             print("Error: --mint required for analyze mode")

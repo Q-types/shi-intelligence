@@ -2,6 +2,7 @@
 
 This module defines all REST API endpoints for token intelligence,
 forecasting, wallet profiles, and risk belief updates.
+Includes WebSocket endpoints for real-time alert streaming.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, Query, Path
+from fastapi import Body, FastAPI, HTTPException, Query, Path, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import structlog
@@ -36,6 +37,7 @@ from .dependencies import (
     get_settings,
     clear_risk_models,
 )
+from .websocket import ws_manager, SubscriptionType
 
 logger = structlog.get_logger()
 
@@ -523,3 +525,88 @@ async def clear_cache() -> dict[str, str]:
     """
     clear_risk_models()
     return {"status": "success", "message": "Risk model cache cleared"}
+
+
+# WebSocket endpoints
+@app.websocket("/api/v1/ws/alerts")
+async def websocket_alerts(websocket: WebSocket):
+    """WebSocket endpoint for real-time alert streaming.
+
+    Connect and subscribe to alerts:
+    - Subscribe to specific token: {"action": "subscribe", "type": "token", "filter": "TOKEN_MINT"}
+    - Subscribe to user alerts: {"action": "subscribe", "type": "user", "filter": "USER_ID"}
+    - Unsubscribe: {"action": "unsubscribe", "type": "token", "filter": "TOKEN_MINT"}
+    - Ping: {"action": "ping"}
+
+    Received messages:
+    - {"type": "alert", "data": {...}} - Alert notification
+    - {"type": "heartbeat", "data": {"status": "alive"}} - Heartbeat (every 30s)
+    - {"type": "subscribe_ack", "data": {...}} - Subscription confirmation
+    - {"type": "error", "data": {"error": "..."}} - Error message
+    """
+    connection_id = await ws_manager.connect(websocket)
+
+    try:
+        while True:
+            # Receive and handle messages
+            message = await websocket.receive_text()
+            await ws_manager.handle_message(connection_id, message)
+
+    except WebSocketDisconnect:
+        logger.info("websocket_client_disconnected", connection_id=connection_id)
+    except Exception as e:
+        logger.error("websocket_error", connection_id=connection_id, error=str(e))
+    finally:
+        await ws_manager.disconnect(connection_id)
+
+
+@app.websocket("/api/v1/ws/alerts/token/{mint}")
+async def websocket_token_alerts(
+    websocket: WebSocket,
+    mint: str,
+):
+    """WebSocket endpoint for a specific token's alerts.
+
+    Automatically subscribes to the token specified in the path.
+
+    Parameters
+    ----------
+    mint : str
+        Token mint address to subscribe to.
+    """
+    connection_id = await ws_manager.connect(websocket)
+
+    try:
+        # Auto-subscribe to the token
+        await ws_manager.subscribe(connection_id, SubscriptionType.TOKEN, mint)
+
+        while True:
+            message = await websocket.receive_text()
+            await ws_manager.handle_message(connection_id, message)
+
+    except WebSocketDisconnect:
+        logger.info("websocket_client_disconnected", connection_id=connection_id)
+    except Exception as e:
+        logger.error("websocket_error", connection_id=connection_id, error=str(e))
+    finally:
+        await ws_manager.disconnect(connection_id)
+
+
+@app.get(
+    "/api/v1/ws/stats",
+    tags=["WebSocket"],
+    summary="Get WebSocket connection statistics",
+)
+async def get_websocket_stats() -> dict[str, Any]:
+    """Get WebSocket connection and subscription statistics.
+
+    Returns
+    -------
+    dict
+        Statistics about active connections and subscriptions.
+    """
+    return {
+        "status": "success",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "statistics": ws_manager.get_statistics(),
+    }

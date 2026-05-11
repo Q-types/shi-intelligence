@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        env_prefix="SHI_",
+        # No prefix - read HELIUS_API_KEY, DATABASE_URL, etc. directly
         case_sensitive=False,
     )
 
@@ -47,6 +47,12 @@ class Settings(BaseSettings):
         default=10,
         description="Max requests per user per minute",
     )
+    telegram_rate_limit_global: int = Field(
+        default=100,
+        description="Max global requests per minute",
+    )
+    admin_user_ids: str = Field(default="", description="Comma-separated admin user IDs")
+    premium_user_ids: str = Field(default="", description="Comma-separated premium user IDs")
 
     # Processing
     max_holders_per_token: int = Field(
@@ -76,7 +82,12 @@ class Settings(BaseSettings):
 
     # Monitoring
     log_level: str = Field(default="INFO", description="Logging level")
+    log_format: str = Field(default="json", description="Log format (json or text)")
     enable_metrics: bool = Field(default=True, description="Enable Prometheus metrics")
+
+    # Development
+    debug: bool = Field(default=False, description="Enable debug mode")
+    use_testnet: bool = Field(default=False, description="Use Solana testnet")
 
 
 settings = Settings()

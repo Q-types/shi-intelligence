@@ -2,6 +2,7 @@
 
 This module provides FastAPI endpoints for external integrations
 and dashboard access to token intelligence data.
+Includes WebSocket endpoints for real-time alert streaming.
 """
 
 from __future__ import annotations
@@ -21,6 +22,12 @@ from .dependencies import (
     get_risk_model,
     get_settings,
 )
+from .websocket import (
+    ws_manager,
+    WebSocketConnectionManager,
+    SubscriptionType,
+    WebSocketMessage,
+)
 
 __all__ = [
     # App
@@ -38,4 +45,9 @@ __all__ = [
     "get_forecaster",
     "get_risk_model",
     "get_settings",
+    # WebSocket
+    "ws_manager",
+    "WebSocketConnectionManager",
+    "SubscriptionType",
+    "WebSocketMessage",
 ]
