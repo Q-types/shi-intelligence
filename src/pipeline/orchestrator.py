@@ -8,6 +8,8 @@ Coordinates the full analysis pipeline:
 4. Graph analysis
 5. Archetype clustering
 6. Risk scoring
+6a. Fetch price data
+6b. Fetch liquidity data
 
 Handles timeouts, errors, and partial results.
 """
@@ -15,17 +17,19 @@ Handles timeouts, errors, and partial results.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import structlog
 
 from ..core.config import settings
 from ..core.types import TokenMint
 from ..data.client import SolanaDataClient
+from ..data.price_provider import JupiterPriceProvider, PriceData
 from ..graph import FundingGraph, detect_communities, find_shared_funders
 from ..clustering import cluster_wallets
+from ..liquidity.pools import LiquidityFetcher, PoolInfo
 from ..risk.scoring import RiskReport, generate_risk_report
 from ..metrics.normalization import BaselineStatistics
 from .features import FeatureEngineer
@@ -54,12 +58,18 @@ class AnalysisResult:
     # Graph stats
     graph_stats: dict[str, Any]
 
+    # Price and liquidity data
+    price_data: PriceData | None = None
+    liquidity_usd: float | None = None
+    liquidity_pools: list[PoolInfo] = field(default_factory=list)
+    liquidity_adjusted_pressure: float | None = None
+
     # Metadata
-    analysis_version: str
-    computed_at: datetime
-    latency_ms: int
-    is_partial: bool
-    warnings: list[str]
+    analysis_version: str = "1.0.0"
+    computed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    latency_ms: int = 0
+    is_partial: bool = False
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Export as dictionary for API/Telegram output."""
@@ -67,10 +77,16 @@ class AnalysisResult:
             "mint": self.mint,
             "holder_count": self.holder_count,
             "total_supply": self.total_supply,
-            "metrics": self.metrics.to_dict(),
+            "metrics": self.metrics.to_dict() if self.metrics else None,
             "archetypes": self.archetypes,
             "risk": self.risk_report.to_dict() if self.risk_report else None,
             "graph": self.graph_stats,
+            "price": self.price_data.to_dict() if self.price_data else None,
+            "liquidity": {
+                "total_usd": self.liquidity_usd,
+                "pool_count": len(self.liquidity_pools),
+                "adjusted_pressure": self.liquidity_adjusted_pressure,
+            } if self.liquidity_usd is not None else None,
             "metadata": {
                 "version": self.analysis_version,
                 "computed_at": self.computed_at.isoformat(),
@@ -98,12 +114,19 @@ class AnalysisOrchestrator:
         self,
         data_client: SolanaDataClient | None = None,
         baseline: BaselineStatistics | None = None,
+        price_provider: JupiterPriceProvider | None = None,
+        liquidity_fetcher: LiquidityFetcher | None = None,
     ):
         self.data_client = data_client
         self.baseline = baseline or self._get_default_baseline()
+        self.price_provider = price_provider
+        self.liquidity_fetcher = liquidity_fetcher
         self.feature_engineer = FeatureEngineer()
         self.metrics_pipeline = MetricsPipeline()
         self._timeout = settings.sla_timeout_seconds
+
+        # Lazy initialize providers if enabled
+        self._price_enabled = settings.enable_price_features
 
     async def analyze(
         self,
@@ -179,12 +202,23 @@ class AnalysisOrchestrator:
             funding_graph.add_wallet(wallet)
         funding_graph.add_edges_from_list(funding_edges)
 
+        # Step 3a: Fetch price data (if enabled)
+        price_data: PriceData | None = None
+        if self._price_enabled:
+            logger.info("step_3a_fetching_price", mint=mint)
+            price_data = await self._fetch_price_data(mint, warnings)
+
+        # Step 3b: Fetch liquidity data
+        logger.info("step_3b_fetching_liquidity", mint=mint)
+        liquidity_usd, liquidity_pools = await self._fetch_liquidity_data(mint, warnings)
+
         # Step 3: Compute features
         logger.info("step_3_computing_features")
         features = self.feature_engineer.compute_features(
             snapshot=snapshot,
             funding_graph=funding_graph,
             temporal_ctx=None,  # Would need historical data
+            price_data=price_data,
         )
 
         # Step 4: Compute metrics
@@ -241,7 +275,7 @@ class AnalysisOrchestrator:
             metrics={k: v for k, v in metrics_dict.items() if v is not None},
             sell_probabilities=top_holder_sell_probs,
             baseline=self.baseline,
-            liquidity_depth=None,  # Would need DEX data
+            liquidity_depth=liquidity_usd,
             model_version=self.VERSION,
         )
 
@@ -264,6 +298,11 @@ class AnalysisOrchestrator:
             holders=snapshot.holder_count,
         )
 
+        # Calculate liquidity-adjusted sell pressure
+        liquidity_adjusted_pressure: float | None = None
+        if risk_report and liquidity_usd:
+            liquidity_adjusted_pressure = risk_report.liquidity_adjusted_pressure
+
         return AnalysisResult(
             mint=mint,
             holder_count=snapshot.holder_count,
@@ -273,6 +312,10 @@ class AnalysisOrchestrator:
             risk_report=risk_report,
             top_holder_sell_probs=top_holder_sell_probs,
             graph_stats=graph_stats,
+            price_data=price_data,
+            liquidity_usd=liquidity_usd,
+            liquidity_pools=liquidity_pools,
+            liquidity_adjusted_pressure=liquidity_adjusted_pressure,
             analysis_version=self.VERSION,
             computed_at=end_time,
             latency_ms=latency_ms,
@@ -343,3 +386,83 @@ class AnalysisOrchestrator:
             coordination_mean=0.15,
             coordination_std=0.10,
         )
+
+    async def _fetch_price_data(
+        self,
+        mint: str,
+        warnings: list[str],
+    ) -> PriceData | None:
+        """Fetch price data for a token.
+
+        Args:
+            mint: Token mint address
+            warnings: List to append warnings to
+
+        Returns:
+            PriceData if available, None otherwise
+        """
+        # Initialize provider if needed
+        if self.price_provider is None:
+            self.price_provider = JupiterPriceProvider()
+
+        try:
+            price = await self.price_provider.get_price(mint)
+            if price:
+                logger.info(
+                    "price_fetched",
+                    mint=mint[:8],
+                    price_usd=price.price_usd,
+                    confidence=price.confidence,
+                )
+            else:
+                warnings.append("Price data not available for this token")
+            return price
+        except Exception as e:
+            logger.warning("price_fetch_failed", mint=mint[:8], error=str(e))
+            warnings.append(f"Failed to fetch price: {str(e)}")
+            return None
+
+    async def _fetch_liquidity_data(
+        self,
+        mint: str,
+        warnings: list[str],
+    ) -> tuple[float | None, list[PoolInfo]]:
+        """Fetch liquidity data for a token.
+
+        Args:
+            mint: Token mint address
+            warnings: List to append warnings to
+
+        Returns:
+            Tuple of (total_liquidity_usd, list_of_pools)
+        """
+        # Initialize fetcher if needed
+        if self.liquidity_fetcher is None:
+            self.liquidity_fetcher = LiquidityFetcher()
+
+        try:
+            pools = await self.liquidity_fetcher.get_all_pools(mint)
+            total_liquidity = sum(p.liquidity_usd or 0 for p in pools)
+
+            if pools:
+                logger.info(
+                    "liquidity_fetched",
+                    mint=mint[:8],
+                    pool_count=len(pools),
+                    total_usd=total_liquidity,
+                )
+            else:
+                warnings.append("No liquidity pools found for this token")
+
+            return total_liquidity if pools else None, pools
+        except Exception as e:
+            logger.warning("liquidity_fetch_failed", mint=mint[:8], error=str(e))
+            warnings.append(f"Failed to fetch liquidity: {str(e)}")
+            return None, []
+
+    async def close(self) -> None:
+        """Close all providers and clients."""
+        if self.price_provider:
+            await self.price_provider.close()
+        if self.liquidity_fetcher:
+            await self.liquidity_fetcher.close()

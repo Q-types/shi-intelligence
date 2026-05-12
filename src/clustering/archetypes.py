@@ -143,6 +143,11 @@ class WalletFeatureVector:
     # Flags
     is_exchange: bool = False
 
+    # Price features (optional, set when price data available)
+    entry_price_usd: float | None = None
+    current_price_usd: float | None = None
+    unrealized_pnl_ratio: float = 0.0
+
     def to_array(self) -> NDArray[np.float64]:
         """Convert to numpy array for clustering."""
         return np.array([

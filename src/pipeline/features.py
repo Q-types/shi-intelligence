@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from typing import TYPE_CHECKING
 
 import numpy as np
 import structlog
@@ -15,6 +16,9 @@ import structlog
 from ..core.types import HolderSnapshot
 from ..graph import FundingGraph, compute_graph_features
 from ..clustering.archetypes import WalletFeatureVector
+
+if TYPE_CHECKING:
+    from ..data.price_provider import PriceData
 
 logger = structlog.get_logger()
 
@@ -48,6 +52,7 @@ class FeatureEngineer:
         funding_graph: FundingGraph,
         temporal_ctx: TemporalContext | None = None,
         trade_history: dict[str, list[datetime]] | None = None,
+        price_data: "PriceData | None" = None,
     ) -> list[WalletFeatureVector]:
         """
         Compute features for all wallets in snapshot.
@@ -57,6 +62,7 @@ class FeatureEngineer:
             funding_graph: Funding relationship graph
             temporal_ctx: Optional temporal context for time-based features
             trade_history: Optional trade timestamps per wallet
+            price_data: Optional current price data for price-based features
 
         Returns:
             List of WalletFeatureVector for each holder
@@ -117,6 +123,11 @@ class FeatureEngineer:
             eigenvector_centrality = gf.eigenvector_centrality if gf else 0.0
             shared_funder_count = gf.shared_funder_count if gf else 0
 
+            # Compute price features if price data available
+            entry_price, current_price, pnl_ratio = self._compute_price_features(
+                wallet, temporal_ctx, price_data
+            )
+
             features.append(WalletFeatureVector(
                 wallet=wallet,
                 balance=float(balance.balance),
@@ -135,6 +146,9 @@ class FeatureEngineer:
                 out_degree=out_degree,
                 eigenvector_centrality=eigenvector_centrality,
                 shared_funder_count=shared_funder_count,
+                entry_price_usd=entry_price,
+                current_price_usd=current_price,
+                unrealized_pnl_ratio=pnl_ratio,
             ))
 
         logger.info("features_computed", count=len(features))
@@ -313,3 +327,39 @@ class FeatureEngineer:
             swap_frequency = 0.0
 
         return trade_count, float(burstiness), float(swap_frequency)
+
+    def _compute_price_features(
+        self,
+        wallet: str,
+        ctx: TemporalContext | None,
+        price_data: "PriceData | None",
+    ) -> tuple[float | None, float | None, float]:
+        """
+        Compute price-based features for a wallet.
+
+        Returns:
+            (entry_price_usd, current_price_usd, unrealized_pnl_ratio)
+        """
+        if price_data is None:
+            return None, None, 0.0
+
+        current_price = price_data.price_usd
+
+        # If we have historical balance data, estimate entry price
+        # For now, we use current price as we'd need historical price data
+        # to calculate actual entry price
+        entry_price: float | None = None
+
+        if ctx and wallet in ctx.historical_balances:
+            history = ctx.historical_balances[wallet]
+            if history:
+                # In a full implementation, we'd look up historical prices
+                # at the entry time. For now, use current price as baseline.
+                entry_price = current_price
+
+        # Calculate unrealized PnL ratio
+        pnl_ratio = 0.0
+        if entry_price is not None and entry_price > 0:
+            pnl_ratio = (current_price - entry_price) / entry_price
+
+        return entry_price, current_price, pnl_ratio

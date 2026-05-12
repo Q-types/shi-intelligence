@@ -85,6 +85,20 @@ class Settings(BaseSettings):
     log_format: str = Field(default="json", description="Log format (json or text)")
     enable_metrics: bool = Field(default=True, description="Enable Prometheus metrics")
 
+    # Price Data
+    jupiter_api_url: str = Field(
+        default="https://api.jup.ag/price/v3",
+        description="Jupiter Price API endpoint",
+    )
+    price_cache_ttl_seconds: int = Field(
+        default=60,
+        description="Cache TTL for price data in seconds",
+    )
+    enable_price_features: bool = Field(
+        default=True,
+        description="Enable price-based features in analysis",
+    )
+
     # Development
     debug: bool = Field(default=False, description="Enable debug mode")
     use_testnet: bool = Field(default=False, description="Use Solana testnet")

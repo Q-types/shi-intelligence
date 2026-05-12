@@ -69,8 +69,8 @@ reports/calibration_plots/
 *.key
 credentials.json
 
-# Local data
-data/
+# Local data (root level only, not src/data/)
+/data/
 *.parquet
 *.csv
 

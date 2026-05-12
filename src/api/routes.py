@@ -31,7 +31,12 @@ from .schemas import (
     SequenceAnalysisResponse,
     HealthResponse,
     ErrorResponse,
+    PriceDataResponse,
+    LiquidityDataResponse,
+    PoolInfoResponse,
 )
+from src.data.price_provider import JupiterPriceProvider
+from src.liquidity.pools import LiquidityFetcher
 from .dependencies import (
     get_risk_model,
     get_settings,
@@ -284,6 +289,153 @@ async def get_risk_explanation(
         ],
         "narrative": "Risk is primarily driven by holder concentration...",
     }
+
+
+# Price endpoints
+@app.get(
+    "/api/v1/token/{mint}/price",
+    response_model=PriceDataResponse,
+    tags=["Price & Liquidity"],
+    summary="Get token price",
+)
+async def get_token_price(
+    mint: str = Path(..., description="Token mint address"),
+    skip_cache: bool = Query(False, description="Bypass cache and fetch fresh data"),
+) -> PriceDataResponse:
+    """Get current price data for a token from Jupiter API.
+
+    Parameters
+    ----------
+    mint : str
+        Token mint address (32-44 character base58 string).
+    skip_cache : bool
+        If True, bypass the price cache and fetch fresh data.
+
+    Returns
+    -------
+    PriceDataResponse
+        Token price data including USD price, confidence, and source.
+
+    Raises
+    ------
+    HTTPException
+        404 if price data is not available for the token.
+    """
+    logger.info("price_request", mint=mint, skip_cache=skip_cache)
+
+    # Validate mint address
+    if len(mint) < 32 or len(mint) > 44:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid mint address format",
+        )
+
+    # Fetch price
+    provider = JupiterPriceProvider()
+    try:
+        price = await provider.get_price(mint, skip_cache=skip_cache)
+        if price is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Price data not available for token {mint}",
+            )
+
+        return PriceDataResponse(
+            mint=price.mint,
+            price_usd=price.price_usd,
+            price_change_24h_pct=price.price_change_24h_pct,
+            confidence=price.confidence,
+            source=price.source,
+            fetched_at=price.fetched_at,
+        )
+    finally:
+        await provider.close()
+
+
+@app.get(
+    "/api/v1/token/{mint}/liquidity",
+    response_model=LiquidityDataResponse,
+    tags=["Price & Liquidity"],
+    summary="Get token liquidity",
+)
+async def get_token_liquidity(
+    mint: str = Path(..., description="Token mint address"),
+    include_pools: bool = Query(True, description="Include detailed pool data"),
+    limit: int = Query(10, ge=1, le=50, description="Max pools to return"),
+) -> LiquidityDataResponse:
+    """Get liquidity pool data for a token from supported DEXes.
+
+    Aggregates liquidity data from Raydium and Orca pools.
+
+    Parameters
+    ----------
+    mint : str
+        Token mint address (32-44 character base58 string).
+    include_pools : bool
+        Whether to include detailed pool information.
+    limit : int
+        Maximum number of pools to return (1-50).
+
+    Returns
+    -------
+    LiquidityDataResponse
+        Token liquidity data including total USD liquidity and pool details.
+    """
+    logger.info("liquidity_request", mint=mint, include_pools=include_pools)
+
+    # Validate mint address
+    if len(mint) < 32 or len(mint) > 44:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid mint address format",
+        )
+
+    # Fetch liquidity
+    fetcher = LiquidityFetcher()
+    try:
+        pools = await fetcher.get_all_pools(mint)
+
+        # Calculate total liquidity
+        total_liquidity = sum(p.liquidity_usd or 0 for p in pools)
+
+        # Convert pools to response format
+        pool_responses = []
+        if include_pools:
+            for pool in pools[:limit]:
+                pool_responses.append(PoolInfoResponse(
+                    pool_address=pool.pool_address,
+                    dex=pool.dex,
+                    token_a_mint=pool.token_a_mint,
+                    token_b_mint=pool.token_b_mint,
+                    liquidity_usd=pool.liquidity_usd,
+                    volume_24h_usd=pool.volume_24h_usd,
+                    fee_rate=pool.fee_rate,
+                ))
+
+        # Get deepest pool
+        deepest = None
+        if pools:
+            deepest_pool = pools[0]  # Already sorted by liquidity
+            deepest = PoolInfoResponse(
+                pool_address=deepest_pool.pool_address,
+                dex=deepest_pool.dex,
+                token_a_mint=deepest_pool.token_a_mint,
+                token_b_mint=deepest_pool.token_b_mint,
+                liquidity_usd=deepest_pool.liquidity_usd,
+                volume_24h_usd=deepest_pool.volume_24h_usd,
+                fee_rate=deepest_pool.fee_rate,
+            )
+
+        return LiquidityDataResponse(
+            mint=mint,
+            total_liquidity_usd=total_liquidity,
+            pool_count=len(pools),
+            pools=pool_responses,
+            deepest_pool=deepest,
+            fetched_at=datetime.now(timezone.utc),
+        )
+    finally:
+        await fetcher.close()
 
 
 # Wallet endpoints

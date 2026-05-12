@@ -329,3 +329,97 @@ class PaginationParams(BaseModel):
 
     offset: int = Field(default=0, ge=0, description="Items to skip")
     limit: int = Field(default=20, ge=1, le=100, description="Max items to return")
+
+
+class PriceDataResponse(BaseModel):
+    """Response for token price data.
+
+    Attributes
+    ----------
+    mint : str
+        Token mint address.
+    price_usd : float
+        Current price in USD.
+    price_change_24h_pct : float | None
+        24-hour price change percentage.
+    confidence : str
+        Price confidence level.
+    source : str
+        Data source identifier.
+    fetched_at : datetime
+        Timestamp when price was fetched.
+    """
+
+    mint: str = Field(..., description="Token mint address")
+    price_usd: float = Field(..., description="Current price in USD")
+    price_change_24h_pct: float | None = Field(
+        None, description="24-hour price change percentage"
+    )
+    confidence: str = Field(
+        ..., description="Price confidence: high, medium, or low"
+    )
+    source: str = Field(..., description="Data source (e.g., jupiter)")
+    fetched_at: datetime = Field(..., description="Timestamp of price fetch")
+
+
+class PoolInfoResponse(BaseModel):
+    """Response for a single liquidity pool.
+
+    Attributes
+    ----------
+    pool_address : str
+        Pool contract address.
+    dex : str
+        DEX name (raydium, orca, etc.).
+    token_a_mint : str
+        Token A mint address.
+    token_b_mint : str
+        Token B mint address.
+    liquidity_usd : float | None
+        Total liquidity in USD.
+    volume_24h_usd : float | None
+        24-hour trading volume in USD.
+    fee_rate : float
+        Pool fee rate.
+    """
+
+    pool_address: str = Field(..., description="Pool contract address")
+    dex: str = Field(..., description="DEX name")
+    token_a_mint: str = Field(..., description="Token A mint address")
+    token_b_mint: str = Field(..., description="Token B mint address")
+    liquidity_usd: float | None = Field(None, description="Total liquidity in USD")
+    volume_24h_usd: float | None = Field(None, description="24h trading volume")
+    fee_rate: float = Field(..., description="Pool fee rate")
+
+
+class LiquidityDataResponse(BaseModel):
+    """Response for token liquidity data.
+
+    Attributes
+    ----------
+    mint : str
+        Token mint address.
+    total_liquidity_usd : float
+        Total liquidity across all pools in USD.
+    pool_count : int
+        Number of liquidity pools found.
+    pools : list[PoolInfoResponse]
+        List of pool details.
+    deepest_pool : PoolInfoResponse | None
+        Pool with highest liquidity.
+    fetched_at : datetime
+        Timestamp when liquidity was fetched.
+    """
+
+    mint: str = Field(..., description="Token mint address")
+    total_liquidity_usd: float = Field(
+        ..., description="Total liquidity across all pools"
+    )
+    pool_count: int = Field(..., description="Number of pools found")
+    pools: list[PoolInfoResponse] = Field(
+        default_factory=list, description="List of pool details"
+    )
+    deepest_pool: PoolInfoResponse | None = Field(
+        None, description="Pool with highest liquidity"
+    )
+    fetched_at: datetime = Field(..., description="Timestamp of liquidity fetch")
