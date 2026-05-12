@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ
+# sa.JSON() removed for SQLite compatibility
 
 
 revision: str = "002"
@@ -26,7 +26,7 @@ def upgrade() -> None:
         "metric_snapshots",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("token_mint", sa.String(44), nullable=False, index=True),
-        sa.Column("timestamp", TIMESTAMPTZ, nullable=False, index=True),
+        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False, index=True),
 
         # Core distribution metrics
         sa.Column("hhi", sa.Float(), nullable=False),
@@ -44,7 +44,7 @@ def upgrade() -> None:
 
         # Metadata
         sa.Column("snapshot_version", sa.String(20), default="2.0.0"),
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # Composite index for efficient time-series queries
@@ -66,11 +66,11 @@ def upgrade() -> None:
         sa.Column("anomaly_score", sa.Float(), nullable=True),
 
         # Temporal metadata
-        sa.Column("first_seen", TIMESTAMPTZ, nullable=False),
-        sa.Column("last_updated", TIMESTAMPTZ, nullable=False),
+        sa.Column("first_seen", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_updated", sa.DateTime(timezone=True), nullable=False),
 
-        # Profile evolution history (JSONB for flexibility)
-        sa.Column("profile_history", JSONB, default=list),
+        # Profile evolution history (sa.JSON() for flexibility)
+        sa.Column("profile_history", sa.JSON(), default=list),
         # Structure: [{"timestamp": "2026-05-07T...", "archetype": "sniper", "risk_score": 0.8, ...}]
 
         # Graph embeddings (will be populated by graph-ml agent)
@@ -79,9 +79,9 @@ def upgrade() -> None:
 
         # Watch list tracking
         sa.Column("is_watched", sa.Boolean(), default=False),
-        sa.Column("watch_added_at", TIMESTAMPTZ, nullable=True),
+        sa.Column("watch_added_at", sa.DateTime(timezone=True), nullable=True),
 
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # Regime states - HMM-based holder regime tracking
@@ -89,7 +89,7 @@ def upgrade() -> None:
         "holder_regimes",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("token_mint", sa.String(44), nullable=False, index=True),
-        sa.Column("timestamp", TIMESTAMPTZ, nullable=False, index=True),
+        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False, index=True),
 
         # Regime classification
         sa.Column("regime", sa.String(50), nullable=False),
@@ -106,7 +106,7 @@ def upgrade() -> None:
 
         # Model metadata
         sa.Column("model_version", sa.String(20), default="1.0.0"),
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     op.create_index(
@@ -124,11 +124,11 @@ def upgrade() -> None:
         sa.Column("alert_type", sa.String(50), nullable=False),
         # Values: whale_movement, regime_change, anomaly_spike, concentration_increase
 
-        sa.Column("timestamp", TIMESTAMPTZ, nullable=False, index=True),
+        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False, index=True),
         sa.Column("severity", sa.String(20), nullable=False),  # low, medium, high, critical
 
         # Alert payload
-        sa.Column("details", JSONB, nullable=False),
+        sa.Column("details", sa.JSON(), nullable=False),
         # Structure: {"amount_usd": 1000000, "pct_of_supply": 0.05, "description": "..."}
 
         # Delivery tracking
@@ -136,7 +136,7 @@ def upgrade() -> None:
         sa.Column("sent_to_webhook", sa.Boolean(), default=False),
         sa.Column("telegram_message_id", sa.String(100), nullable=True),
 
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # User alert configurations
@@ -156,8 +156,8 @@ def upgrade() -> None:
         sa.Column("webhook_url", sa.String(500), nullable=True),
 
         # Metadata
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
-        sa.Column("updated_at", TIMESTAMPTZ, server_default=sa.func.now(), onupdate=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
     op.create_index(

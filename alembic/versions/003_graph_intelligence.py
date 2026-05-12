@@ -14,12 +14,12 @@ Create Date: 2026-05-07
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB, ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY
 
 
 # revision identifiers, used by Alembic.
-revision = "003_graph_intelligence"
-down_revision = "002_temporal_foundation"
+revision = "003"
+down_revision = "002"
 branch_labels = None
 depends_on = None
 
@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("vector", ARRAY(sa.Float), nullable=False),
         sa.Column("dimensions", sa.Integer, nullable=False),
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False),
-        sa.Column("metadata", JSONB, nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
     )
 
     # Indexes for embeddings
@@ -90,7 +90,7 @@ def upgrade() -> None:
         sa.Column("sybil_probability", sa.Float, nullable=False),
         sa.Column("shared_funders", ARRAY(sa.Text), nullable=True),
         sa.Column("detected_at", sa.TIMESTAMP(timezone=True), nullable=False),
-        sa.Column("metadata", JSONB, nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
     )
 
     op.create_index(
@@ -119,7 +119,7 @@ def upgrade() -> None:
         sa.Column("avg_clustering_coefficient", sa.Float, nullable=False),
         sa.Column("num_communities", sa.Integer, nullable=False),
         sa.Column("largest_component_size", sa.Integer, nullable=False),
-        sa.Column("metadata", JSONB, nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
     )
 
     op.create_index(
@@ -143,7 +143,7 @@ def upgrade() -> None:
         sa.Column("anomaly_score", sa.Float, nullable=False),
         sa.Column("is_anomalous", sa.Boolean, nullable=False),
         sa.Column("confidence", sa.Float, nullable=False),
-        sa.Column("feature_contributions", JSONB, nullable=True),
+        sa.Column("feature_contributions", sa.JSON(), nullable=True),
         sa.Column("computed_at", sa.TIMESTAMP(timezone=True), nullable=False),
     )
 
@@ -175,7 +175,7 @@ def upgrade() -> None:
         sa.Column("communities_after", sa.Integer, nullable=True),
         sa.Column("density_change", sa.Float, nullable=True),
         sa.Column("modularity_change", sa.Float, nullable=True),
-        sa.Column("metadata", JSONB, nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
     )
 
     op.create_index(

@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ
+# sa.JSON() removed for SQLite compatibility
 
 
 revision: str = "004"
@@ -35,13 +35,13 @@ def upgrade() -> None:
 
         # Tracking
         sa.Column("last_balance", sa.Float(), nullable=True),
-        sa.Column("last_checked", TIMESTAMPTZ, nullable=True),
+        sa.Column("last_checked", sa.DateTime(timezone=True), nullable=True),
 
         # Metadata
-        sa.Column("added_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("added_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("notes", sa.Text(), nullable=True),
 
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # Composite index for user watchlist queries
@@ -60,13 +60,13 @@ def upgrade() -> None:
     )
 
     # Profile snapshots - detailed historical snapshots
-    # (wallet_profiles.profile_history stores compact JSONB,
+    # (wallet_profiles.profile_history stores compact sa.JSON(),
     #  this stores full detailed snapshots for analysis)
     op.create_table(
         "profile_snapshots",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("wallet_address", sa.String(44), nullable=False, index=True),
-        sa.Column("timestamp", TIMESTAMPTZ, nullable=False, index=True),
+        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False, index=True),
 
         # Profile data
         sa.Column("archetype", sa.String(50), nullable=True),
@@ -74,7 +74,7 @@ def upgrade() -> None:
         sa.Column("anomaly_score", sa.Float(), nullable=True),
 
         # Features (for ML model inspection)
-        sa.Column("features", JSONB, nullable=True),
+        sa.Column("features", sa.JSON(), nullable=True),
         # Structure: {"in_degree": 5, "out_degree": 3, "funding_ratio": 0.6, ...}
 
         # Graph metrics
@@ -88,7 +88,7 @@ def upgrade() -> None:
 
         # Metadata
         sa.Column("snapshot_version", sa.String(20), default="1.0.0"),
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # Composite index for efficient time-series queries
@@ -108,7 +108,7 @@ def upgrade() -> None:
         sa.Column("delivery_method", sa.String(20), nullable=False),
         # Values: telegram, webhook, email
 
-        sa.Column("attempted_at", TIMESTAMPTZ, nullable=False),
+        sa.Column("attempted_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("success", sa.Boolean(), nullable=False),
 
         # Delivery details
@@ -118,9 +118,9 @@ def upgrade() -> None:
 
         # Retry tracking
         sa.Column("retry_count", sa.Integer(), default=0),
-        sa.Column("next_retry_at", TIMESTAMPTZ, nullable=True),
+        sa.Column("next_retry_at", sa.DateTime(timezone=True), nullable=True),
 
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     op.create_index(
@@ -155,8 +155,8 @@ def upgrade() -> None:
         sa.Column("max_alerts_per_hour", sa.Integer(), default=10),
         sa.Column("batch_alerts", sa.Boolean(), default=False),
 
-        sa.Column("created_at", TIMESTAMPTZ, server_default=sa.func.now()),
-        sa.Column("updated_at", TIMESTAMPTZ, server_default=sa.func.now(), onupdate=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
 

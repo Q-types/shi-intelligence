@@ -23,7 +23,11 @@ from sqlalchemy import (
     UniqueConstraint,
     JSON,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+
+# Use JSON for SQLite compatibility, JSONB for PostgreSQL performance
+# Both work with SQLAlchemy's JSON column type
+from sqlalchemy import JSON as JSONB  # Alias for compatibility
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -425,3 +429,223 @@ class AlertConfig(Base):
     )
 
     __table_args__ = (Index("ix_alert_configs_user_token", "user_id", "token_mint", unique=True),)
+
+
+# ============================================================================
+# Cross-Token Intelligence Models (Sprint 8+)
+# ============================================================================
+
+
+class EntityType:
+    """Entity type constants."""
+
+    SYBIL_CLUSTER = "sybil_cluster"
+    WHALE_GROUP = "whale_group"
+    EXCHANGE = "exchange"
+    MARKET_MAKER = "market_maker"
+    UNKNOWN = "unknown"
+
+
+class DetectionMethod:
+    """How entity membership was detected."""
+
+    SHARED_FUNDER = "shared_funder"
+    TEMPORAL_SYNC = "temporal_sync"
+    BEHAVIOR_SIMILARITY = "behavior_similarity"
+    MANUAL = "manual"
+
+
+class ConfidenceLevel:
+    """Reputation confidence levels."""
+
+    LOW = "low"  # < 5 tokens analyzed
+    MEDIUM = "medium"  # 5-20 tokens
+    HIGH = "high"  # > 20 tokens
+
+
+class WalletHistory(Base):
+    """
+    Track wallet behavior across multiple tokens.
+
+    Records archetype, PnL, holding duration for each wallet-token interaction.
+    Enables cross-token pattern detection (serial snipers, diamond hands, etc.)
+    """
+
+    __tablename__ = "wallet_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    wallet_address: Mapped[str] = mapped_column(String(44), index=True)
+    token_mint: Mapped[str] = mapped_column(String(44), index=True)
+
+    # Temporal data
+    first_seen_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    holding_duration_days: Mapped[Optional[int]] = mapped_column(Integer)
+
+    # Classification at time of analysis
+    archetype_assigned: Mapped[Optional[str]] = mapped_column(String(50))
+    archetype_confidence: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Price and PnL data
+    entry_price_usd: Mapped[Optional[float]] = mapped_column(Float)
+    exit_price_usd: Mapped[Optional[float]] = mapped_column(Float)
+    realized_pnl_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Behavior metrics
+    max_balance: Mapped[Optional[int]] = mapped_column(BigInteger)
+    max_share_pct: Mapped[Optional[float]] = mapped_column(Float)
+    trade_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Pattern flags (for quick filtering)
+    was_sniper: Mapped[bool] = mapped_column(Boolean, default=False)
+    was_accumulator: Mapped[bool] = mapped_column(Boolean, default=False)
+    was_early_exit: Mapped[bool] = mapped_column(Boolean, default=False)
+    token_rugged: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("wallet_address", "token_mint", name="uq_wallet_history_wallet_token"),
+        Index("ix_wallet_history_wallet", "wallet_address"),
+        Index("ix_wallet_history_token", "token_mint"),
+        Index("ix_wallet_history_archetype", "archetype_assigned"),
+        Index("ix_wallet_history_sniper", "was_sniper"),
+    )
+
+
+class Entity(Base):
+    """
+    Entity grouping for related wallets.
+
+    Groups wallets that share funders, act in coordination, or exhibit
+    similar behavior patterns. Used for Sybil detection and risk aggregation.
+    """
+
+    __tablename__ = "entities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(50), index=True)  # EntityType values
+    confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Primary detection info
+    dominant_funder_address: Mapped[Optional[str]] = mapped_column(String(44))
+    detection_method: Mapped[str] = mapped_column(String(50))  # DetectionMethod values
+
+    # Aggregated stats (updated periodically)
+    wallet_count: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_targeted: Mapped[int] = mapped_column(Integer, default=0)
+    total_volume_usd: Mapped[Optional[float]] = mapped_column(Float)
+    avg_coordination_score: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Risk assessment
+    is_professional_sybil: Mapped[bool] = mapped_column(Boolean, default=False)
+    risk_level: Mapped[Optional[str]] = mapped_column(String(20))  # low, medium, high, critical
+
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # Relationships
+    memberships: Mapped[list["EntityMembership"]] = relationship(
+        back_populates="entity", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_entities_type", "entity_type"),
+        Index("ix_entities_funder", "dominant_funder_address"),
+        Index("ix_entities_professional", "is_professional_sybil"),
+    )
+
+
+class EntityMembership(Base):
+    """
+    Junction table linking wallets to entities.
+
+    Tracks how each wallet was detected as part of an entity
+    and the confidence of that membership.
+    """
+
+    __tablename__ = "entity_memberships"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), index=True)
+    wallet_address: Mapped[str] = mapped_column(String(44), index=True)
+
+    # Detection info
+    membership_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    detected_via: Mapped[str] = mapped_column(String(50))  # DetectionMethod values
+
+    # Supporting evidence
+    shared_funder_address: Mapped[Optional[str]] = mapped_column(String(44))
+    temporal_correlation: Mapped[Optional[float]] = mapped_column(Float)
+    behavior_similarity: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Metadata
+    added_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+
+    # Relationships
+    entity: Mapped["Entity"] = relationship(back_populates="memberships")
+
+    __table_args__ = (
+        UniqueConstraint("entity_id", "wallet_address", name="uq_entity_membership"),
+        Index("ix_entity_membership_wallet", "wallet_address"),
+        Index("ix_entity_membership_entity", "entity_id"),
+    )
+
+
+class WalletReputation(Base):
+    """
+    Cross-token reputation score for wallets.
+
+    Aggregates behavior across all analyzed tokens to build a
+    reputation score and detect patterns (serial sniper, diamond hands, etc.)
+    """
+
+    __tablename__ = "wallet_reputation"
+
+    wallet_address: Mapped[str] = mapped_column(String(44), primary_key=True)
+
+    # Core reputation score (0-100)
+    reputation_score: Mapped[int] = mapped_column(Integer, default=50)
+    confidence_level: Mapped[str] = mapped_column(String(10), default=ConfidenceLevel.LOW)
+
+    # Token interaction counts
+    tokens_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    sniper_count: Mapped[int] = mapped_column(Integer, default=0)
+    accumulator_count: Mapped[int] = mapped_column(Integer, default=0)
+    rugpull_count: Mapped[int] = mapped_column(Integer, default=0)
+    early_exit_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Aggregated metrics
+    avg_holding_days: Mapped[Optional[float]] = mapped_column(Float)
+    avg_pnl_pct: Mapped[Optional[float]] = mapped_column(Float)
+    total_volume_usd: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Detected patterns (JSONB array of pattern objects)
+    # Format: [{"type": "SERIAL_SNIPER", "confidence": 0.85, "token_count": 5}, ...]
+    patterns: Mapped[list] = mapped_column(JSONB, default=list)
+
+    # Risk flags
+    is_known_bad_actor: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_known_good_actor: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Entity link (if part of a detected entity)
+    entity_id: Mapped[Optional[int]] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"))
+
+    # Metadata
+    first_analyzed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    last_updated: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_wallet_reputation_score", "reputation_score"),
+        Index("ix_wallet_reputation_confidence", "confidence_level"),
+        Index("ix_wallet_reputation_bad_actor", "is_known_bad_actor"),
+    )
