@@ -7,8 +7,14 @@ for the SWEENEE token on Solana.
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# Ensure sweenee directory is in Python path for imports
+_sweenee_dir = Path(__file__).parent.resolve()
+if str(_sweenee_dir) not in sys.path:
+    sys.path.insert(0, str(_sweenee_dir))
 
 import pandas as pd
 import plotly.express as px
