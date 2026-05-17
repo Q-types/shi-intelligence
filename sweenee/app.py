@@ -784,7 +784,7 @@ def main():
         show_individual = st.checkbox("Show by Wallet", value=False)
 
     # Create wallet label mapping for chart
-    wallet_labels = {w.address: w.label or w.address[:8] for w in wallets}
+    wallet_labels = {w["address"]: w.get("label") or w["address"][:8] for w in wallets}
 
     history_chart = render_historical_chart(
         SWEENEE_MINT,
