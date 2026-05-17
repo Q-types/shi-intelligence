@@ -299,7 +299,7 @@ class SweeneeCache:
                     direction=row["direction"],
                     classification=TransactionType(row["classification"]),
                     counterparty=row["counterparty"],
-                    dex_source=row.get("dex_source", "unknown"),
+                    dex_source=row["dex_source"] if "dex_source" in row.keys() else "unknown",
                     explorer_url=row["explorer_url"],
                     raw=json.loads(row["raw_json"]) if row["raw_json"] else None,
                 )

@@ -195,10 +195,10 @@ class AlertService:
             wallet_address=row["wallet_address"],
             alert_type=AlertType(row["alert_type"]),
             amount=row["amount"],
-            threshold_triggered=row.get("threshold_triggered"),
-            tx_signature=row.get("tx_signature"),
+            threshold_triggered=row["threshold_triggered"],
+            tx_signature=row["tx_signature"],
             created_at=datetime.fromisoformat(row["created_at"]),
-            acknowledged=bool(row.get("acknowledged", 0)),
+            acknowledged=bool(row["acknowledged"]),
         )
 
 
