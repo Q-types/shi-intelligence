@@ -1,0 +1,35 @@
+# SWEENEE Whale Wallets
+# Format: label: address
+
+# Fox wallets
+Fox: HnwdzYDtnRVYBMNegtcGUdNGRgQ1RYw6BgCH3ZVzeRHY
+Fox-2: 9kpZ5PBru3Aoud9Jn4R4RUMBqFa9fqkNjGhtiW4cH9mf
+Fox-3: 2DEx3tnhDiBUwBREqkSaFjVKkdYx4sLHxBgBKa82BL17
+Fox-4: 7p61dC3PxUzobJwB5ki7QixVQdEfu5DVF1rmkA2J3WtD
+Fox-5: DkwjsnfuNyeGFxRDPyvUfZ8oyukznLjS2yukZGcV2V3z
+Fox-6: HcKYWFEiYGz7xzVfm1qqvTBo5YB4RocW5xVPzJzAC6mr
+Fox-7: J84FTGieWMMzpQZCdWRfG2w5Evz7cHU79Y6hCagNVtWQ
+Fox-8: ESY43Hh9mbh1jRQevRcx63nZdpn9qpkKphSwdDkbDbs
+
+# ALON
+ALON: CqXdZLpPBvfVcYpWj5CdMMiehRuqy95oxCU8Nws7HYhY
+
+# Qtyp wallets
+Qtyp: 9fyT6buGebS61jUXfeKwqPHZvijTbwwLFU2tU1kojyXd
+Qtyp-2: Ebc7J7BQC6xZjSLoLTQMCikW1xaRm9utMacMR2Frtbm8
+
+# Crypto Lobster wallets
+Lobster: 6ekShVdYUggs2jycHYdJovUMfEYh4wo47wT7FDsEqJwP
+Lobster-2: 6vRTPDCqF3SPzjbEQgatATG1JHtryXKUA4ey9V7NH2Ke
+Lobster-3: BhUDhZvjN3PAcWyFRARY4GzAaqPLxmDF5hhziD3Qwn7Z
+Lobster-4: 5aMhnjQg8PEW77K2e3twQeMyZzwhGYANfKzHrcyayq6r
+Lobster-5: EL9TvYd3sbUaCY9DBbYv82HwxiYrToRZzaqqj7AgGaBT
+Lobster-6: J9aU1xZKfZYBnuVnLba88J8hvAzUBrx7ARsPXi3tXCrz
+Lobster-7: 64wHznLodonkLsVsncgwEeCMSzHsd78A5xt3ArvzseEb
+Lobster-8: DpFescGbwaRZR22UFgTm321ZJkyTj4h61vnb9ffEF9MT
+Lobster-9: 9nRYKPKaTFnieH7w79nzYREErqzXy7oDr7ToDQ66iV6R
+
+# Cookies wallets
+Cookies: 3ky4PjygZq2dTRk2hkgAAN1wdoZs61fQSSfsjYE9i5Jv
+Cookies-2: Dg49Pt1wHwNtjqFTqaou5a3nyhpGchGV1gqQU7UMofpz
+Cookies-3: 4EP3LXN2DK8yygedwMA3G3FR7PUs1dLXURc7pYvqtKNi

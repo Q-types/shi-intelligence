@@ -10,9 +10,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from pathlib import Path as FilePath
+
 from fastapi import Body, FastAPI, HTTPException, Query, Path, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 import structlog
 
 from src.explainability.dashboard_data import (
@@ -36,7 +39,21 @@ from .schemas import (
     PoolInfoResponse,
 )
 from src.data.price_provider import JupiterPriceProvider
+from src.data.client import SolanaDataClient
 from src.liquidity.pools import LiquidityFetcher
+from src.metrics import (
+    compute_hhi,
+    compute_shannon_entropy,
+    compute_gini_coefficient,
+    compute_whale_dominance_ratio,
+)
+from src.clustering.archetypes import (
+    WalletFeatureVector,
+    cluster_wallets,
+    assign_archetype,
+    get_archetype_distribution,
+)
+from src.graph import FundingGraph, find_shared_funders
 from .dependencies import (
     get_risk_model,
     get_settings,
@@ -97,6 +114,11 @@ def create_app() -> FastAPI:
                 message="An unexpected error occurred",
             ).model_dump(mode="json"),
         )
+
+    # Mount static files
+    static_dir = FilePath(__file__).parent.parent.parent / "static"
+    if static_dir.exists():
+        application.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     return application
 
@@ -762,3 +784,241 @@ async def get_websocket_stats() -> dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "statistics": ws_manager.get_statistics(),
     }
+
+
+# Dashboard endpoints
+@app.get(
+    "/api/v1/dashboard/analyze/{mint}",
+    tags=["Dashboard"],
+    summary="Full token analysis for dashboard",
+)
+async def dashboard_analyze(
+    mint: str = Path(..., description="Token mint address"),
+) -> dict[str, Any]:
+    """Get complete token analysis for the web dashboard.
+
+    This endpoint returns all data needed for the dashboard UI:
+    - Token info (mint, supply, holder count)
+    - Price data (from Jupiter API)
+    - Distribution metrics (HHI, Gini, Entropy, Whale Dominance)
+    - Risk score
+    - Top holders with shares
+    - Funding edges for graph visualization
+
+    Parameters
+    ----------
+    mint : str
+        Token mint address (32-44 character base58 string).
+
+    Returns
+    -------
+    dict
+        Complete analysis data for dashboard rendering.
+    """
+    logger.info("dashboard_analyze_request", mint=mint)
+
+    # Validate mint address
+    if len(mint) < 32 or len(mint) > 44:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid mint address format (should be 32-44 characters)",
+        )
+
+    client = SolanaDataClient()
+    price_provider = JupiterPriceProvider()
+
+    try:
+        # Fetch price data
+        price_data = None
+        try:
+            price = await price_provider.get_price(mint)
+            if price:
+                price_data = {
+                    "price_usd": price.price_usd,
+                    "price_change_24h_pct": price.price_change_24h_pct,
+                    "confidence": price.confidence,
+                }
+        except Exception as e:
+            logger.warning("price_fetch_failed", mint=mint, error=str(e))
+
+        # Fetch holder data
+        snapshot = await client.get_token_holders(mint, limit=5000)
+
+        # Compute metrics
+        shares = snapshot.shares
+        balances = [b.balance for b in snapshot.balances]
+
+        hhi = compute_hhi(shares)
+        entropy = compute_shannon_entropy(shares)
+        gini = compute_gini_coefficient(balances)
+        wdr = compute_whale_dominance_ratio(balances, snapshot.total_supply)
+
+        # Compute risk score
+        risk_score = (
+            (1.0 if hhi.value > 0.25 else 0.5 if hhi.value > 0.1 else 0.0) +
+            (1.0 if entropy.value < 2 else 0.5 if entropy.value < 4 else 0.0) +
+            (1.0 if gini.value > 0.8 else 0.5 if gini.value > 0.5 else 0.0) +
+            (1.0 if wdr.value > 0.5 else 0.5 if wdr.value > 0.3 else 0.0)
+        ) / 4.0
+
+        # Format holders for response
+        sorted_balances = sorted(snapshot.balances, key=lambda x: x.balance, reverse=True)
+        holders = []
+        for bal in sorted_balances[:100]:  # Top 100 holders
+            share = bal.balance / snapshot.total_supply if snapshot.total_supply > 0 else 0
+            holders.append({
+                "wallet": bal.wallet,
+                "balance": bal.balance,
+                "share": share,
+            })
+
+        # Fetch funding edges
+        funding_edges = []
+        funding_graph = FundingGraph()
+        try:
+            top_wallets = [h["wallet"] for h in holders[:50]]
+            edges = await client.get_funding_edges(top_wallets)
+
+            # Build funding graph
+            for wallet in top_wallets:
+                funding_graph.add_wallet(wallet)
+            funding_graph.add_edges_from_list(edges)
+
+            funding_edges = [
+                {
+                    "from": edge.source,
+                    "to": edge.target,
+                    "amount": edge.amount_lamports,
+                }
+                for edge in edges
+            ]
+        except Exception as e:
+            logger.warning("funding_edges_failed", error=str(e))
+
+        # Compute wallet archetypes
+        archetype_assignments = {}
+        archetype_distribution = {}
+        shared_funders_map = {}
+
+        try:
+            # Find shared funders for coordination detection
+            top_wallets = [h["wallet"] for h in holders[:50]]
+            shared_funders = find_shared_funders(funding_graph, top_wallets)
+
+            # Build shared funder count per wallet
+            shared_funder_counts: dict[str, int] = {}
+            for funder, funded_wallets in shared_funders.items():
+                for wallet in funded_wallets:
+                    shared_funder_counts[wallet] = shared_funder_counts.get(wallet, 0) + 1
+
+            # Track which wallets share a funder for UI
+            for funder, funded_wallets in shared_funders.items():
+                if len(funded_wallets) >= 2:
+                    for wallet in funded_wallets:
+                        if wallet not in shared_funders_map:
+                            shared_funders_map[wallet] = []
+                        shared_funders_map[wallet].append({
+                            "funder": funder,
+                            "co_funded": [w for w in funded_wallets if w != wallet][:5],
+                        })
+
+            # Build feature vectors for classification
+            features_list = []
+            for i, holder in enumerate(holders[:50]):
+                wallet = holder["wallet"]
+                share = holder["share"]
+
+                # Get graph features
+                in_degree = funding_graph.get_in_degree(wallet)
+                out_degree = funding_graph.get_out_degree(wallet)
+
+                features_list.append(WalletFeatureVector(
+                    wallet=wallet,
+                    balance=float(holder["balance"]),
+                    share=share,
+                    rank=i + 1,
+                    entry_time_relative=0.0,  # Would need historical data
+                    holding_duration=0.0,
+                    position_volatility=0.0,
+                    delta_balance_7d=0.0,
+                    delta_balance_30d=0.0,
+                    trade_count=0,
+                    burstiness=0.0,
+                    swap_frequency=0.0,
+                    lp_interaction_ratio=0.0,
+                    in_degree=in_degree,
+                    out_degree=out_degree,
+                    eigenvector_centrality=0.0,
+                    shared_funder_count=shared_funder_counts.get(wallet, 0),
+                ))
+
+            # Cluster into archetypes
+            assignments = cluster_wallets(features_list)
+            archetype_assignments = {
+                wallet: {
+                    "archetype": a.archetype.value,
+                    "confidence": a.confidence,
+                    "matching_features": a.matching_features,
+                }
+                for wallet, a in assignments.items()
+            }
+
+            # Get distribution
+            archetype_distribution = get_archetype_distribution(assignments)
+
+            logger.info(
+                "archetypes_computed",
+                wallet_count=len(archetype_assignments),
+                distribution=archetype_distribution,
+            )
+
+        except Exception as e:
+            logger.warning("archetype_computation_failed", error=str(e))
+
+        # Add archetype to each holder
+        for holder in holders:
+            wallet = holder["wallet"]
+            if wallet in archetype_assignments:
+                holder["archetype"] = archetype_assignments[wallet]["archetype"]
+                holder["archetype_confidence"] = archetype_assignments[wallet]["confidence"]
+            else:
+                holder["archetype"] = "unknown"
+                holder["archetype_confidence"] = 0.0
+
+            # Add shared funder info if exists
+            if wallet in shared_funders_map:
+                holder["shared_funders"] = shared_funders_map[wallet]
+
+        return {
+            "token_mint": mint,
+            "price": price_data,
+            "holder_count": snapshot.holder_count,
+            "total_supply": snapshot.total_supply,
+            "risk_score": risk_score,
+            "metrics": {
+                "hhi": hhi.value,
+                "gini": gini.value,
+                "entropy": entropy.value,
+                "whale_dominance": wdr.value,
+            },
+            "archetypes": archetype_distribution,
+            "holders": holders,
+            "funding_edges": funding_edges,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    finally:
+        await client.close()
+        await price_provider.close()
+
+
+# Serve dashboard HTML at root
+@app.get("/", include_in_schema=False)
+async def serve_dashboard():
+    """Serve the dashboard HTML page."""
+    from fastapi.responses import FileResponse
+    static_dir = FilePath(__file__).parent.parent.parent / "static"
+    index_path = static_dir / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
+    raise HTTPException(status_code=404, detail="Dashboard not found")
