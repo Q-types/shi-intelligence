@@ -41,6 +41,13 @@ from src.transactions import fetch_all_transactions, SweeneeTransaction, Transac
 from src.cache import get_cache, SweeneeCache
 from src.metrics import compute_dashboard_metrics, compute_wallet_flows, DashboardMetrics
 from src.telegram_summary import generate_daily_summary, generate_weekly_summary
+from src.history import SnapshotService, render_historical_chart
+from src.alerts import AlertService, render_alert_banners
+from src.export import (
+    export_wallets_csv, export_wallets_json,
+    export_transactions_csv, export_transactions_json,
+    get_export_filename,
+)
 
 
 # --- Styling ---
@@ -601,6 +608,10 @@ def main():
         }
     )
 
+    # Save daily balance snapshots for historical charts
+    snapshot_service = SnapshotService(SWEENEE_MINT)
+    snapshot_service.take_snapshot(balances)
+
     # --- HERO CONFIDENCE BANNER ---
     render_confidence_banner(metrics, transactions)
 
@@ -764,8 +775,33 @@ def main():
 
     st.divider()
 
+    # --- Historical Holdings Chart ---
+    st.subheader("📈 Holdings Over Time")
+
+    hist_col1, hist_col2 = st.columns([3, 1])
+    with hist_col2:
+        history_days = st.selectbox("Time Range", [7, 14, 30, 60, 90], index=2)
+        show_individual = st.checkbox("Show by Wallet", value=False)
+
+    # Create wallet label mapping for chart
+    wallet_labels = {w.address: w.label or w.address[:8] for w in wallets}
+
+    history_chart = render_historical_chart(
+        SWEENEE_MINT,
+        days=history_days,
+        show_individual=show_individual,
+        wallet_labels=wallet_labels if show_individual else None,
+    )
+
+    if history_chart:
+        st.plotly_chart(history_chart, use_container_width=True)
+    else:
+        st.info("📊 Historical data will appear after a few days of tracking. Check back soon!")
+
+    st.divider()
+
     # --- Balance Charts ---
-    st.subheader("📈 Balance Charts")
+    st.subheader("📊 Current Holdings")
 
     chart1, chart2 = st.columns(2)
 
@@ -958,6 +994,91 @@ def main():
         weekly = generate_weekly_summary(metrics)
         st.code(weekly, language=None)
         st.button("📋 Copy Weekly Summary", key="copy_weekly")
+
+    # --- Sidebar: Exports & Settings ---
+    with st.sidebar:
+        st.header("🛠️ Tools")
+
+        # Export Section
+        st.subheader("📥 Export Data")
+
+        exp_col1, exp_col2 = st.columns(2)
+        with exp_col1:
+            # Wallets CSV
+            wallets_csv = export_wallets_csv(balances)
+            st.download_button(
+                "📊 Wallets CSV",
+                data=wallets_csv,
+                file_name=get_export_filename("wallets", "csv"),
+                mime="text/csv",
+                use_container_width=True,
+            )
+            # Transactions CSV
+            tx_csv = export_transactions_csv(transactions)
+            st.download_button(
+                "📋 Transactions CSV",
+                data=tx_csv,
+                file_name=get_export_filename("transactions", "csv"),
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        with exp_col2:
+            # Wallets JSON
+            wallets_json = export_wallets_json(balances)
+            st.download_button(
+                "📊 Wallets JSON",
+                data=wallets_json,
+                file_name=get_export_filename("wallets", "json"),
+                mime="application/json",
+                use_container_width=True,
+            )
+            # Transactions JSON
+            tx_json = export_transactions_json(transactions)
+            st.download_button(
+                "📋 Transactions JSON",
+                data=tx_json,
+                file_name=get_export_filename("transactions", "json"),
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        st.divider()
+
+        # Alerts Section
+        st.subheader("🚨 Alert Settings")
+        alert_threshold = st.number_input(
+            "Large move threshold",
+            min_value=100_000,
+            max_value=10_000_000,
+            value=1_000_000,
+            step=100_000,
+            format="%d",
+            help="Minimum SWEENEE for large buy/sell alert",
+        )
+
+        # Check for alerts
+        alert_service = AlertService(large_move_threshold=alert_threshold)
+        current_bals = {b.address: b.ui_amount for b in balances}
+        new_alerts = alert_service.check_transactions(transactions, current_bals)
+
+        if new_alerts:
+            st.success(f"Generated {len(new_alerts)} new alert(s)")
+
+        # Show recent alerts
+        recent_alerts = alert_service.get_recent_alerts(hours=24)
+        if recent_alerts:
+            st.markdown(f"**Recent Alerts:** {len(recent_alerts)}")
+            for alert in recent_alerts[:3]:
+                st.markdown(f"{alert.emoji} {alert.description[:30]}...")
+
+        st.divider()
+
+        # Info
+        st.subheader("ℹ️ Info")
+        st.caption(f"Wallets: {len(wallets)}")
+        st.caption(f"Transactions: {len(transactions)}")
+        st.caption(f"Token: {SWEENEE_MINT[:8]}...")
 
     # --- Footer ---
     st.markdown(

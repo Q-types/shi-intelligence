@@ -37,6 +37,7 @@ class SweeneeTransaction:
     direction: str  # "in", "out", "neutral"
     classification: TransactionType
     counterparty: str | None = None
+    dex_source: str = "unknown"  # jupiter_v6, jupiter_v4, raydium, orca, unknown
     explorer_url: str = ""
     raw: dict | None = field(default=None, repr=False)
 
@@ -62,7 +63,7 @@ def classify_transaction(
     mint: str,
     tx_data: dict[str, Any],
     amount_change: float,
-) -> tuple[TransactionType, str | None]:
+) -> tuple[TransactionType, str | None, str]:
     """Classify a transaction based on available data.
 
     Classification hierarchy:
@@ -71,20 +72,25 @@ def classify_transaction(
     3. SWEENEE moves in without swap = transfer_in
     4. SWEENEE moves out without swap = transfer_out
     5. Otherwise = unknown
+
+    Returns:
+        Tuple of (TransactionType, counterparty, dex_source)
     """
     counterparty = None
+    dex_source = "unknown"
 
     # Check if transaction is a DEX swap
     is_swap = False
     has_sol_movement = False
     has_stable_movement = False
 
-    # Known DEX program IDs
+    # Known DEX program IDs with names
     dex_programs = {
-        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  # Jupiter v6
-        "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",  # Jupiter v4
-        "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",  # Raydium AMM
-        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  # Orca Whirlpool
+        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "jupiter_v6",
+        "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB": "jupiter_v4",
+        "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": "raydium",
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "orca",
+        "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP": "orca_v2",
     }
 
     try:
@@ -99,9 +105,10 @@ def classify_transaction(
             for key in account_keys
         ]
 
-        for prog in dex_programs:
-            if prog in program_ids:
+        for prog_id, prog_name in dex_programs.items():
+            if prog_id in program_ids:
                 is_swap = True
+                dex_source = prog_name
                 break
 
         # Check for SOL/stablecoin movements in pre/post balances
@@ -142,16 +149,16 @@ def classify_transaction(
     # Apply classification logic
     if amount_change > 0:
         if is_swap and has_sol_movement:
-            return TransactionType.BUY, counterparty
+            return TransactionType.BUY, counterparty, dex_source
         else:
-            return TransactionType.TRANSFER_IN, counterparty
+            return TransactionType.TRANSFER_IN, counterparty, "none"
     elif amount_change < 0:
         if is_swap and has_sol_movement:
-            return TransactionType.SELL, counterparty
+            return TransactionType.SELL, counterparty, dex_source
         else:
-            return TransactionType.TRANSFER_OUT, counterparty
+            return TransactionType.TRANSFER_OUT, counterparty, "none"
     else:
-        return TransactionType.UNKNOWN, counterparty
+        return TransactionType.UNKNOWN, counterparty, "unknown"
 
 
 async def parse_transaction_for_sweenee(
@@ -206,7 +213,7 @@ async def parse_transaction_for_sweenee(
             direction = "neutral"
 
         # Classify
-        classification, counterparty = classify_transaction(
+        classification, counterparty, dex_source = classify_transaction(
             wallet, mint, tx_data, amount_change
         )
 
@@ -219,6 +226,7 @@ async def parse_transaction_for_sweenee(
             direction=direction,
             classification=classification,
             counterparty=counterparty,
+            dex_source=dex_source,
             raw=tx_data,
         )
 

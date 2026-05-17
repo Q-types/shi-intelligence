@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS sweenee_transactions (
     direction TEXT NOT NULL,
     classification TEXT NOT NULL,
     counterparty TEXT,
+    dex_source TEXT DEFAULT 'unknown',
     explorer_url TEXT,
     raw_json TEXT,
     cached_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -65,10 +66,45 @@ CREATE TABLE IF NOT EXISTS dashboard_runs (
     summary_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS balance_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_address TEXT NOT NULL,
+    token_mint TEXT NOT NULL,
+    ui_amount REAL NOT NULL,
+    snapshot_date TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(wallet_address, token_mint, snapshot_date)
+);
+
+CREATE TABLE IF NOT EXISTS whale_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_address TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    threshold_triggered REAL,
+    tx_signature TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    acknowledged INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS webhook_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_hash TEXT UNIQUE NOT NULL,
+    message_type TEXT NOT NULL,
+    payload_preview TEXT,
+    sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL,
+    retry_count INTEGER DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_balances_wallet ON wallet_balances(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_balances_fetched ON wallet_balances(fetched_at);
 CREATE INDEX IF NOT EXISTS idx_txs_wallet ON sweenee_transactions(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_txs_time ON sweenee_transactions(block_time);
+CREATE INDEX IF NOT EXISTS idx_snapshots_wallet_date ON balance_snapshots(wallet_address, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_snapshots_date ON balance_snapshots(snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_alerts_created ON whale_alerts(created_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_ack ON whale_alerts(acknowledged);
 """
 
 
@@ -211,8 +247,8 @@ class SweeneeCache:
                     """
                     INSERT OR REPLACE INTO sweenee_transactions
                     (signature, block_time, wallet_address, token_mint, amount_change,
-                     direction, classification, counterparty, explorer_url, raw_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     direction, classification, counterparty, dex_source, explorer_url, raw_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         tx.signature,
@@ -223,6 +259,7 @@ class SweeneeCache:
                         tx.direction,
                         tx.classification.value,
                         tx.counterparty,
+                        tx.dex_source,
                         tx.explorer_url,
                         json.dumps(tx.raw) if tx.raw else None,
                     ),
@@ -262,6 +299,7 @@ class SweeneeCache:
                     direction=row["direction"],
                     classification=TransactionType(row["classification"]),
                     counterparty=row["counterparty"],
+                    dex_source=row.get("dex_source", "unknown"),
                     explorer_url=row["explorer_url"],
                     raw=json.loads(row["raw_json"]) if row["raw_json"] else None,
                 )
@@ -313,6 +351,205 @@ class SweeneeCache:
             ).fetchall()
 
             return [dict(row) for row in rows]
+
+    # --- Balance Snapshot Methods ---
+
+    def save_balance_snapshot(
+        self, wallet_address: str, token_mint: str, ui_amount: float, snapshot_date: str | None = None
+    ):
+        """Save a daily balance snapshot (upsert by wallet+date)."""
+        if snapshot_date is None:
+            snapshot_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO balance_snapshots (wallet_address, token_mint, ui_amount, snapshot_date)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(wallet_address, token_mint, snapshot_date)
+                DO UPDATE SET ui_amount = excluded.ui_amount, created_at = CURRENT_TIMESTAMP
+                """,
+                (wallet_address, token_mint, ui_amount, snapshot_date),
+            )
+            conn.commit()
+
+    def save_balance_snapshots_batch(self, balances: list[WalletBalance], mint: str):
+        """Save balance snapshots for all wallets (batch operation)."""
+        snapshot_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        with self._connect() as conn:
+            for bal in balances:
+                conn.execute(
+                    """
+                    INSERT INTO balance_snapshots (wallet_address, token_mint, ui_amount, snapshot_date)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(wallet_address, token_mint, snapshot_date)
+                    DO UPDATE SET ui_amount = excluded.ui_amount, created_at = CURRENT_TIMESTAMP
+                    """,
+                    (bal.address, mint, bal.ui_amount, snapshot_date),
+                )
+            conn.commit()
+        logger.debug("snapshots_saved", count=len(balances), date=snapshot_date)
+
+    def get_wallet_history(
+        self, wallet_address: str, mint: str, days: int = 30
+    ) -> list[dict[str, Any]]:
+        """Get historical balances for a single wallet."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT snapshot_date, ui_amount
+                FROM balance_snapshots
+                WHERE wallet_address = ? AND token_mint = ? AND snapshot_date >= ?
+                ORDER BY snapshot_date ASC
+                """,
+                (wallet_address, mint, cutoff),
+            ).fetchall()
+
+            return [dict(row) for row in rows]
+
+    def get_all_wallet_history(self, mint: str, days: int = 30) -> list[dict[str, Any]]:
+        """Get historical balances for all wallets (for stacked area chart)."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT wallet_address, snapshot_date, ui_amount
+                FROM balance_snapshots
+                WHERE token_mint = ? AND snapshot_date >= ?
+                ORDER BY snapshot_date ASC, wallet_address ASC
+                """,
+                (mint, cutoff),
+            ).fetchall()
+
+            return [dict(row) for row in rows]
+
+    def get_total_history(self, mint: str, days: int = 30) -> list[dict[str, Any]]:
+        """Get aggregated total balance history by date."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT snapshot_date, SUM(ui_amount) as total_balance, COUNT(*) as wallet_count
+                FROM balance_snapshots
+                WHERE token_mint = ? AND snapshot_date >= ?
+                GROUP BY snapshot_date
+                ORDER BY snapshot_date ASC
+                """,
+                (mint, cutoff),
+            ).fetchall()
+
+            return [dict(row) for row in rows]
+
+    # --- Alert Methods ---
+
+    def save_alert(
+        self,
+        wallet_address: str,
+        alert_type: str,
+        amount: float,
+        threshold_triggered: float | None = None,
+        tx_signature: str | None = None,
+    ) -> int:
+        """Save a whale alert and return its ID."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO whale_alerts (wallet_address, alert_type, amount, threshold_triggered, tx_signature)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (wallet_address, alert_type, amount, threshold_triggered, tx_signature),
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+
+    def get_recent_alerts(self, hours: int = 24, include_acknowledged: bool = False) -> list[dict[str, Any]]:
+        """Get recent alerts."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        with self._connect() as conn:
+            if include_acknowledged:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM whale_alerts
+                    WHERE created_at >= ?
+                    ORDER BY created_at DESC
+                    """,
+                    (cutoff,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM whale_alerts
+                    WHERE created_at >= ? AND acknowledged = 0
+                    ORDER BY created_at DESC
+                    """,
+                    (cutoff,),
+                ).fetchall()
+
+            return [dict(row) for row in rows]
+
+    def acknowledge_alert(self, alert_id: int):
+        """Mark an alert as acknowledged."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE whale_alerts SET acknowledged = 1 WHERE id = ?",
+                (alert_id,),
+            )
+            conn.commit()
+
+    # --- Webhook Log Methods ---
+
+    def log_webhook(
+        self, message_hash: str, message_type: str, payload_preview: str, status: str
+    ) -> bool:
+        """Log a webhook send attempt. Returns False if already sent (idempotency check)."""
+        with self._connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO webhook_log (message_hash, message_type, payload_preview, status)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (message_hash, message_type, payload_preview, status),
+                )
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                # Already exists - idempotency check
+                return False
+
+    def update_webhook_status(self, message_hash: str, status: str, increment_retry: bool = False):
+        """Update webhook status (for retries)."""
+        with self._connect() as conn:
+            if increment_retry:
+                conn.execute(
+                    """
+                    UPDATE webhook_log
+                    SET status = ?, retry_count = retry_count + 1
+                    WHERE message_hash = ?
+                    """,
+                    (status, message_hash),
+                )
+            else:
+                conn.execute(
+                    "UPDATE webhook_log SET status = ? WHERE message_hash = ?",
+                    (status, message_hash),
+                )
+            conn.commit()
+
+    def was_webhook_sent(self, message_hash: str) -> bool:
+        """Check if a webhook was already sent (idempotency)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM webhook_log WHERE message_hash = ? AND status = 'sent'",
+                (message_hash,),
+            ).fetchone()
+            return row is not None
 
 
 # Global cache instance
