@@ -121,7 +121,20 @@ class SweeneeCache:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             conn.commit()
+            # Run migrations for existing databases
+            self._run_migrations(conn)
         logger.debug("cache_initialized", path=str(self.db_path))
+
+    def _run_migrations(self, conn: sqlite3.Connection):
+        """Run schema migrations for existing databases."""
+        # Check if dex_source column exists in sweenee_transactions
+        cursor = conn.execute("PRAGMA table_info(sweenee_transactions)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "dex_source" not in columns:
+            conn.execute("ALTER TABLE sweenee_transactions ADD COLUMN dex_source TEXT DEFAULT 'unknown'")
+            conn.commit()
+            logger.info("migration_applied", migration="add_dex_source_column")
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
