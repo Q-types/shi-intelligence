@@ -76,3 +76,6 @@ credentials.json
 
 # Jupyter
 .ipynb_checkpoints/
+
+# SWEENEE (separate repo)
+sweenee/

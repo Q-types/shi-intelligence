@@ -215,13 +215,15 @@ class SweeneeCache:
             if latest_time < cutoff:
                 return None
 
-            # Get balances from latest fetch
+            # Get balances from latest fetch batch (within 60 seconds of latest)
+            # This handles async fetches where each wallet has slightly different timestamp
+            batch_cutoff = (latest_time - timedelta(seconds=60)).isoformat()
             rows = conn.execute(
                 """
                 SELECT * FROM wallet_balances
-                WHERE token_mint = ? AND fetched_at = ?
+                WHERE token_mint = ? AND fetched_at >= ?
                 """,
-                (mint, latest["latest"]),
+                (mint, batch_cutoff),
             ).fetchall()
 
             balances = []

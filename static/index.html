@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SHI Dashboard - Solana Holder Intelligence</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <!-- Chart.js for charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- D3.js for graph visualization -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>SHI Dashboard</h1>
+                <p class="subtitle">Solana Holder Intelligence</p>
+            </div>
+            <div class="header-actions">
+                <input type="text" id="tokenInput" placeholder="Enter token mint address..." class="token-input">
+                <button id="analyzeBtn" class="btn btn-primary">Analyze</button>
+            </div>
+        </header>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="loading-overlay hidden">
+            <div class="loading-spinner"></div>
+            <p>Analyzing token...</p>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Token Info Bar -->
+            <section id="tokenInfo" class="token-info hidden">
+                <div class="token-header">
+                    <h2 id="tokenName">Token Analysis</h2>
+                    <span id="tokenMint" class="token-mint"></span>
+                </div>
+                <div class="token-stats">
+                    <div class="stat">
+                        <span class="stat-label">Price</span>
+                        <span id="tokenPrice" class="stat-value">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">24h Change</span>
+                        <span id="priceChange" class="stat-value">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Holders</span>
+                        <span id="holderCount" class="stat-value">--</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Supply</span>
+                        <span id="totalSupply" class="stat-value">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Risk Assessment -->
+            <section id="riskSection" class="risk-section hidden">
+                <h3>Risk Assessment</h3>
+                <div class="risk-container">
+                    <div class="risk-gauge">
+                        <svg id="riskGauge" viewBox="0 0 200 120"></svg>
+                        <div class="risk-value">
+                            <span id="riskScore">--</span>
+                            <span class="risk-label">Risk Score</span>
+                        </div>
+                    </div>
+                    <div class="risk-details">
+                        <div id="riskLevel" class="risk-badge">--</div>
+                        <p id="riskDescription" class="risk-description"></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Metrics Cards -->
+            <section id="metricsSection" class="metrics-section hidden">
+                <h3>Distribution Metrics</h3>
+                <div class="metrics-grid">
+                    <div class="metric-card" data-metric="hhi">
+                        <div class="metric-header">
+                            <span class="metric-icon">📊</span>
+                            <span class="metric-name">HHI</span>
+                        </div>
+                        <div class="metric-value" id="hhiValue">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="hhiFill"></div>
+                        </div>
+                        <div class="metric-interpretation" id="hhiInterpretation">Herfindahl-Hirschman Index</div>
+                    </div>
+
+                    <div class="metric-card" data-metric="gini">
+                        <div class="metric-header">
+                            <span class="metric-icon">📈</span>
+                            <span class="metric-name">Gini</span>
+                        </div>
+                        <div class="metric-value" id="giniValue">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="giniFill"></div>
+                        </div>
+                        <div class="metric-interpretation" id="giniInterpretation">Inequality coefficient</div>
+                    </div>
+
+                    <div class="metric-card" data-metric="entropy">
+                        <div class="metric-header">
+                            <span class="metric-icon">🔀</span>
+                            <span class="metric-name">Entropy</span>
+                        </div>
+                        <div class="metric-value" id="entropyValue">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="entropyFill"></div>
+                        </div>
+                        <div class="metric-interpretation" id="entropyInterpretation">Shannon diversity</div>
+                    </div>
+
+                    <div class="metric-card" data-metric="wdr">
+                        <div class="metric-header">
+                            <span class="metric-icon">🐋</span>
+                            <span class="metric-name">Whale Dominance</span>
+                        </div>
+                        <div class="metric-value" id="wdrValue">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="wdrFill"></div>
+                        </div>
+                        <div class="metric-interpretation" id="wdrInterpretation">Top 10 holder share</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Charts Row -->
+            <section id="chartsSection" class="charts-section hidden">
+                <div class="charts-grid">
+                    <!-- Holder Distribution Pie Chart -->
+                    <div class="chart-card">
+                        <h3>Holder Distribution</h3>
+                        <div class="chart-container">
+                            <canvas id="distributionChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Top Holders Bar Chart -->
+                    <div class="chart-card">
+                        <h3>Top 10 Holders</h3>
+                        <div class="chart-container">
+                            <canvas id="topHoldersChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Wallet Graph -->
+            <section id="graphSection" class="graph-section hidden">
+                <div class="graph-header">
+                    <h3>Wallet Relationship Graph</h3>
+                    <div class="graph-controls">
+                        <button id="resetGraph" class="btn btn-small">Reset View</button>
+                        <label class="toggle">
+                            <input type="checkbox" id="showLabels" checked>
+                            <span>Show Labels</span>
+                        </label>
+                    </div>
+                </div>
+                <div id="walletGraphContainer" class="graph-container">
+                </div>
+                <div class="graph-legend">
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #e74c3c;"></span>
+                        <span>Sniper</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #27ae60;"></span>
+                        <span>Accumulator</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #9b59b6;"></span>
+                        <span>Coordinated</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #3498db;"></span>
+                        <span>LP Actor</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #1abc9c;"></span>
+                        <span>Dormant Whale</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #95a5a6;"></span>
+                        <span>Unknown</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-line" style="background: #1da1f2; height: 3px;"></span>
+                        <span>Funding Link</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: transparent; border: 2px solid #9b59b6;"></span>
+                        <span>Shared Funder</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Wallet Archetypes Section -->
+            <section id="archetypesSection" class="archetypes-section hidden">
+                <h3>Wallet Behavior Classification</h3>
+                <p class="section-description">Cross-token behavioral patterns detected from funding relationships and trading activity</p>
+                <div id="archetypesContainer" class="archetypes-grid">
+                </div>
+            </section>
+
+            <!-- Top Holders Table -->
+            <section id="holdersSection" class="holders-section hidden">
+                <h3>Top Holders</h3>
+                <div class="table-container">
+                    <table class="holders-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Wallet</th>
+                                <th>Balance</th>
+                                <th>Share</th>
+                                <th>Cumulative</th>
+                                <th>Type</th>
+                                <th>Behavior</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holdersTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Welcome Message (shown when no token analyzed) -->
+            <section id="welcomeSection" class="welcome-section">
+                <div class="welcome-content">
+                    <h2>Welcome to SHI Dashboard</h2>
+                    <p>Enter a Solana token mint address above to analyze holder distribution, risk metrics, and wallet relationships.</p>
+                    <div class="example-tokens">
+                        <p>Try these example tokens:</p>
+                        <button class="example-btn" data-mint="DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263">BONK</button>
+                        <button class="example-btn" data-mint="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v">USDC</button>
+                        <button class="example-btn" data-mint="jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL">JTO</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Classification Definitions -->
+        <section id="definitionsSection" class="definitions-section">
+            <h3>Wallet Classification Definitions</h3>
+            <p class="section-description">How SHI identifies behavioral patterns across wallet activity and funding relationships</p>
+            <div class="definitions-grid">
+                <div class="definition-card">
+                    <div class="definition-header">
+                        <span class="definition-icon">🎯</span>
+                        <span class="definition-name">Sniper</span>
+                    </div>
+                    <p class="definition-text">Wallets that enter positions very early (often within the first blocks of a token's launch) and typically exit quickly. Characterized by high turnover ratios and short holding periods.</p>
+                    <div class="definition-signals">
+                        <span class="signal">Early entry timing</span>
+                        <span class="signal">Short hold duration</span>
+                        <span class="signal">High turnover</span>
+                    </div>
+                </div>
+
+                <div class="definition-card">
+                    <div class="definition-header">
+                        <span class="definition-icon">💎</span>
+                        <span class="definition-name">Long-term Accumulator</span>
+                    </div>
+                    <p class="definition-text">Wallets that gradually build positions over time with minimal selling activity. These holders demonstrate conviction through consistent accumulation and low churn rates.</p>
+                    <div class="definition-signals">
+                        <span class="signal">Gradual position growth</span>
+                        <span class="signal">Low sell activity</span>
+                        <span class="signal">Extended hold periods</span>
+                    </div>
+                </div>
+
+                <div class="definition-card">
+                    <div class="definition-header">
+                        <span class="definition-icon">🔗</span>
+                        <span class="definition-name">Coordinated Cluster</span>
+                    </div>
+                    <p class="definition-text">Wallets that share common funding sources and exhibit synchronized trading behavior. Often indicates a single entity operating multiple wallets to obscure concentration.</p>
+                    <div class="definition-signals">
+                        <span class="signal">Shared funders</span>
+                        <span class="signal">Temporal sync</span>
+                        <span class="signal">Similar patterns</span>
+                    </div>
+                </div>
+
+                <div class="definition-card">
+                    <div class="definition-header">
+                        <span class="definition-icon">💧</span>
+                        <span class="definition-name">Liquidity Actor</span>
+                    </div>
+                    <p class="definition-text">Wallets with frequent interactions with liquidity pools (adding/removing liquidity). These actors provide market depth but may also extract value through LP strategies.</p>
+                    <div class="definition-signals">
+                        <span class="signal">LP interactions</span>
+                        <span class="signal">Pool deposits</span>
+                        <span class="signal">Fee collection</span>
+                    </div>
+                </div>
+
+                <div class="definition-card">
+                    <div class="definition-header">
+                        <span class="definition-icon">🏦</span>
+                        <span class="definition-name">Exchange-linked</span>
+                    </div>
+                    <p class="definition-text">Wallets with signatures matching known centralized exchange (CEX) patterns. High fan-out transactions and interaction patterns consistent with exchange hot/cold wallets.</p>
+                    <div class="definition-signals">
+                        <span class="signal">High fan-out</span>
+                        <span class="signal">CEX signatures</span>
+                        <span class="signal">Batch transfers</span>
+                    </div>
+                </div>
+
+                <div class="definition-card">
+                    <div class="definition-header">
+                        <span class="definition-icon">🐋</span>
+                        <span class="definition-name">Dormant Whale</span>
+                    </div>
+                    <p class="definition-text">Large holders with minimal recent transaction activity. These wallets hold significant supply but haven't moved tokens recently, representing latent sell pressure.</p>
+                    <div class="definition-signals">
+                        <span class="signal">Large balance</span>
+                        <span class="signal">Low activity</span>
+                        <span class="signal">Long dormancy</span>
+                    </div>
+                </div>
+            </div>
+            <p class="definitions-disclaimer">Classifications are probabilistic and based on observable on-chain behavior. Confidence scores reflect the strength of detected signals.</p>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>SHI - Solana Holder Intelligence | All outputs are observational and probabilistic</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/graph.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
