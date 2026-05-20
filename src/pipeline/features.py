@@ -2,6 +2,7 @@
 Feature Engineering Pipeline.
 
 Computes all wallet-level features from raw data per PDR Section 3.2.
+Sprint 7 additions: Price-derived intelligence features.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from ..clustering.archetypes import WalletFeatureVector
 
 if TYPE_CHECKING:
     from ..data.price_provider import PriceData
+    from ..data.repositories.price_snapshot import PriceHistory, LiquidityHistory
+    from ..data.entry_price import WalletPnLData
 
 logger = structlog.get_logger()
 
@@ -30,6 +33,17 @@ class TemporalContext:
     token_launch_time: datetime
     current_time: datetime
     historical_balances: dict[str, list[tuple[datetime, int]]]  # wallet -> [(time, balance)]
+
+
+@dataclass
+class PriceContext:
+    """Price context for price-derived feature computation (Sprint 7)."""
+
+    price_data: "PriceData | None" = None
+    price_history: "PriceHistory | None" = None
+    liquidity_history: "LiquidityHistory | None" = None
+    wallet_pnl_data: dict[str, "WalletPnLData"] | None = None  # wallet -> PnL data
+    holder_count_7d_ago: int | None = None  # For holder growth calculation
 
 
 class FeatureEngineer:
@@ -53,6 +67,7 @@ class FeatureEngineer:
         temporal_ctx: TemporalContext | None = None,
         trade_history: dict[str, list[datetime]] | None = None,
         price_data: "PriceData | None" = None,
+        price_ctx: PriceContext | None = None,
     ) -> list[WalletFeatureVector]:
         """
         Compute features for all wallets in snapshot.
@@ -63,6 +78,7 @@ class FeatureEngineer:
             temporal_ctx: Optional temporal context for time-based features
             trade_history: Optional trade timestamps per wallet
             price_data: Optional current price data for price-based features
+            price_ctx: Optional price context for price-derived intelligence (Sprint 7)
 
         Returns:
             List of WalletFeatureVector for each holder
@@ -71,6 +87,7 @@ class FeatureEngineer:
             "computing_features",
             holder_count=snapshot.holder_count,
             version=self._version,
+            has_price_ctx=price_ctx is not None,
         )
 
         # Sort balances by amount (descending) for ranking
@@ -83,6 +100,11 @@ class FeatureEngineer:
         # Compute graph features for all wallets
         wallet_addresses = [b.wallet for b in snapshot.balances]
         graph_features = compute_graph_features(funding_graph, wallet_addresses)
+
+        # Compute aggregate price intelligence features
+        price_intel = self._compute_price_intelligence(
+            snapshot, sorted_balances, price_ctx
+        )
 
         # Build feature vectors
         features = []
@@ -123,9 +145,14 @@ class FeatureEngineer:
             eigenvector_centrality = gf.eigenvector_centrality if gf else 0.0
             shared_funder_count = gf.shared_funder_count if gf else 0
 
-            # Compute price features if price data available
-            entry_price, current_price, pnl_ratio = self._compute_price_features(
-                wallet, temporal_ctx, price_data
+            # Compute price features
+            entry_price, current_price, pnl_ratio, pnl_usd = self._compute_wallet_price_features(
+                wallet, temporal_ctx, price_data, price_ctx
+            )
+
+            # Compute liquidity features
+            liq_current, liq_1h, liq_24h, liq_confidence = self._compute_liquidity_features(
+                price_ctx
             )
 
             features.append(WalletFeatureVector(
@@ -146,9 +173,24 @@ class FeatureEngineer:
                 out_degree=out_degree,
                 eigenvector_centrality=eigenvector_centrality,
                 shared_funder_count=shared_funder_count,
+                # Price features
                 entry_price_usd=entry_price,
                 current_price_usd=current_price,
                 unrealized_pnl_ratio=pnl_ratio,
+                unrealized_pnl_usd=pnl_usd,
+                # Price-derived intelligence (Sprint 7)
+                price_change_1h_pct=price_intel.get("price_change_1h_pct"),
+                price_change_24h_pct=price_intel.get("price_change_24h_pct"),
+                price_change_7d_pct=price_intel.get("price_change_7d_pct"),
+                holder_growth_vs_price_change=price_intel.get("holder_growth_vs_price_change"),
+                whale_accumulation_vs_price_change=price_intel.get("whale_accumulation_vs_price_change"),
+                sell_pressure_vs_liquidity=price_intel.get("sell_pressure_vs_liquidity"),
+                unrealized_profit_concentration=price_intel.get("unrealized_profit_concentration"),
+                # Liquidity smoothing
+                liquidity_usd_current=liq_current,
+                liquidity_usd_1h_avg=liq_1h,
+                liquidity_usd_24h_avg=liq_24h,
+                liquidity_depth_confidence=liq_confidence,
             ))
 
         logger.info("features_computed", count=len(features))
@@ -328,6 +370,162 @@ class FeatureEngineer:
 
         return trade_count, float(burstiness), float(swap_frequency)
 
+    def _compute_wallet_price_features(
+        self,
+        wallet: str,
+        ctx: TemporalContext | None,
+        price_data: "PriceData | None",
+        price_ctx: PriceContext | None,
+    ) -> tuple[float | None, float | None, float, float | None]:
+        """
+        Compute price-based features for a wallet.
+
+        Returns:
+            (entry_price_usd, current_price_usd, unrealized_pnl_ratio, unrealized_pnl_usd)
+        """
+        if price_data is None and (price_ctx is None or price_ctx.price_data is None):
+            return None, None, 0.0, None
+
+        # Use price from context if available, else from direct param
+        actual_price_data = price_ctx.price_data if price_ctx and price_ctx.price_data else price_data
+        if actual_price_data is None:
+            return None, None, 0.0, None
+
+        current_price = actual_price_data.price_usd
+
+        # Get entry price from wallet PnL data if available
+        entry_price: float | None = None
+        pnl_usd: float | None = None
+
+        if price_ctx and price_ctx.wallet_pnl_data and wallet in price_ctx.wallet_pnl_data:
+            pnl_data = price_ctx.wallet_pnl_data[wallet]
+            entry_price = pnl_data.entry_price_usd
+            pnl_usd = pnl_data.unrealized_pnl_usd
+            pnl_ratio = pnl_data.unrealized_pnl_ratio or 0.0
+            return entry_price, current_price, pnl_ratio, pnl_usd
+
+        # Fallback: estimate entry price from historical balance data
+        if ctx and wallet in ctx.historical_balances:
+            history = ctx.historical_balances[wallet]
+            if history:
+                # In a full implementation, we'd look up historical prices
+                # For now, entry price remains None (unavailable)
+                pass
+
+        # Calculate unrealized PnL ratio
+        pnl_ratio = 0.0
+        if entry_price is not None and entry_price > 0:
+            pnl_ratio = (current_price - entry_price) / entry_price
+
+        return entry_price, current_price, pnl_ratio, pnl_usd
+
+    def _compute_price_intelligence(
+        self,
+        snapshot: HolderSnapshot,
+        sorted_balances: list,
+        price_ctx: PriceContext | None,
+    ) -> dict:
+        """
+        Compute aggregate price-derived intelligence features (Sprint 7).
+
+        Returns dict with:
+        - price_change_1h_pct, price_change_24h_pct, price_change_7d_pct
+        - holder_growth_vs_price_change
+        - whale_accumulation_vs_price_change
+        - sell_pressure_vs_liquidity
+        - unrealized_profit_concentration
+        """
+        result: dict = {}
+
+        if price_ctx is None:
+            return result
+
+        # Price change features from history
+        if price_ctx.price_history:
+            ph = price_ctx.price_history
+            result["price_change_1h_pct"] = ph.price_change_1h_pct
+            result["price_change_24h_pct"] = ph.price_change_24h_pct
+            result["price_change_7d_pct"] = ph.price_change_7d_pct
+
+        # Holder growth vs price change
+        # Positive = holder growth outpacing price (bullish accumulation)
+        # Negative = price growth outpacing holders (possibly speculative)
+        if (
+            price_ctx.holder_count_7d_ago is not None
+            and price_ctx.price_history
+            and price_ctx.price_history.price_change_7d_pct is not None
+            and snapshot.holder_count > 0
+        ):
+            holder_growth_pct = (
+                (snapshot.holder_count - price_ctx.holder_count_7d_ago)
+                / price_ctx.holder_count_7d_ago * 100
+                if price_ctx.holder_count_7d_ago > 0
+                else 0
+            )
+            result["holder_growth_vs_price_change"] = (
+                holder_growth_pct - price_ctx.price_history.price_change_7d_pct
+            )
+
+        # Whale accumulation vs price change
+        # Sum of whale balance changes vs price change
+        # Positive = whales buying despite price falling (strong conviction)
+        # Negative = whales selling while price rising (distribution)
+        if sorted_balances and price_ctx.price_history:
+            top_10_balances = sorted_balances[:10]
+            whale_delta_sum = 0.0
+            for bal in top_10_balances:
+                # Get wallet delta from feature (if available)
+                # For now, use 0 as placeholder - would need historical data
+                pass
+
+            # Placeholder - needs actual whale balance deltas
+            result["whale_accumulation_vs_price_change"] = None
+
+        # Sell pressure vs liquidity
+        # Higher = more sell pressure relative to available liquidity (risk)
+        if price_ctx.liquidity_history and price_ctx.liquidity_history.current:
+            liq = price_ctx.liquidity_history.current
+            if liq > 0:
+                # Compute estimated sell pressure (placeholder - needs hazard model output)
+                # For now, use a placeholder calculation
+                result["sell_pressure_vs_liquidity"] = None
+
+        # Unrealized profit concentration
+        # % of total unrealized profit held by top 10
+        if price_ctx.wallet_pnl_data and sorted_balances:
+            top_10_profit = 0.0
+            total_profit = 0.0
+
+            for i, bal in enumerate(sorted_balances):
+                wallet = bal.wallet
+                if wallet in price_ctx.wallet_pnl_data:
+                    pnl_usd = price_ctx.wallet_pnl_data[wallet].unrealized_pnl_usd
+                    if pnl_usd is not None and pnl_usd > 0:
+                        total_profit += pnl_usd
+                        if i < 10:
+                            top_10_profit += pnl_usd
+
+            if total_profit > 0:
+                result["unrealized_profit_concentration"] = top_10_profit / total_profit
+
+        return result
+
+    def _compute_liquidity_features(
+        self,
+        price_ctx: PriceContext | None,
+    ) -> tuple[float | None, float | None, float | None, str | None]:
+        """
+        Compute liquidity smoothing features (Sprint 7).
+
+        Returns:
+            (liquidity_usd_current, liquidity_usd_1h_avg, liquidity_usd_24h_avg, confidence)
+        """
+        if price_ctx is None or price_ctx.liquidity_history is None:
+            return None, None, None, None
+
+        lh = price_ctx.liquidity_history
+        return lh.current, lh.avg_1h, lh.avg_24h, lh.confidence
+
     def _compute_price_features(
         self,
         wallet: str,
@@ -335,6 +533,8 @@ class FeatureEngineer:
         price_data: "PriceData | None",
     ) -> tuple[float | None, float | None, float]:
         """
+        DEPRECATED: Use _compute_wallet_price_features instead.
+
         Compute price-based features for a wallet.
 
         Returns:

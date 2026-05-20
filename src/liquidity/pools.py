@@ -211,18 +211,39 @@ class OrcaProvider(DEXProvider):
             self._client = None
 
 
+@dataclass
+class SmoothedLiquidity:
+    """Liquidity data with rolling averages for safer risk assessment."""
+
+    current: float
+    avg_1h: float | None
+    avg_24h: float | None
+    confidence: str  # "high", "medium", "low"
+    pool_count: int
+    primary_dex: str | None
+    fetched_at: datetime
+
+
 class LiquidityFetcher:
     """
     Unified liquidity fetcher across multiple DEXes.
 
     Aggregates pool data from all supported DEXes.
+    Sprint 7: Adds liquidity smoothing with rolling averages.
     """
 
-    def __init__(self):
+    def __init__(self, snapshot_repo=None):
+        """
+        Initialize the liquidity fetcher.
+
+        Args:
+            snapshot_repo: Optional LiquiditySnapshotRepository for rolling averages
+        """
         self.providers: list[DEXProvider] = [
             RaydiumProvider(),
             OrcaProvider(),
         ]
+        self._snapshot_repo = snapshot_repo
 
     async def get_all_pools(self, token_mint: TokenMint) -> list[PoolInfo]:
         """Get pools from all DEXes."""
@@ -256,6 +277,77 @@ class LiquidityFetcher:
         """Get the deepest liquidity pool."""
         pools = await self.get_all_pools(token_mint)
         return pools[0] if pools else None
+
+    async def get_smoothed_liquidity(
+        self,
+        token_mint: TokenMint,
+        persist: bool = True,
+    ) -> SmoothedLiquidity:
+        """
+        Get liquidity with rolling averages (Sprint 7).
+
+        Uses historical snapshots to compute 1h and 24h averages,
+        which are more reliable than single-point snapshots that
+        can be manipulated or temporarily spiked.
+
+        Args:
+            token_mint: Token mint address
+            persist: Whether to save this snapshot for future averages
+
+        Returns:
+            SmoothedLiquidity with current value and rolling averages
+        """
+        pools = await self.get_all_pools(token_mint)
+        current = sum(p.liquidity_usd or 0 for p in pools)
+        now = datetime.now(timezone.utc)
+
+        # Determine primary DEX
+        primary_dex = pools[0].dex if pools else None
+
+        # Save snapshot for future average calculations
+        if persist and self._snapshot_repo and pools:
+            deepest = pools[0]
+            await self._snapshot_repo.save_snapshot(
+                mint=token_mint,
+                liquidity_usd=current,
+                pool_address=deepest.pool_address,
+                dex=deepest.dex,
+            )
+
+        # Get historical data for averages
+        avg_1h: float | None = None
+        avg_24h: float | None = None
+        confidence = "low"
+
+        if self._snapshot_repo:
+            history = await self._snapshot_repo.get_liquidity_history(
+                token_mint, hours=24
+            )
+            avg_1h = history.avg_1h
+            avg_24h = history.avg_24h
+            confidence = history.confidence
+
+        # If no historical data, use current as baseline
+        if avg_1h is None:
+            avg_1h = current
+        if avg_24h is None:
+            avg_24h = current
+
+        # Compute confidence from data quality
+        if self._snapshot_repo is None:
+            confidence = "low"
+        elif current < 10_000:  # < $10K liquidity is always low confidence
+            confidence = "low"
+
+        return SmoothedLiquidity(
+            current=current,
+            avg_1h=avg_1h,
+            avg_24h=avg_24h,
+            confidence=confidence,
+            pool_count=len(pools),
+            primary_dex=primary_dex,
+            fetched_at=now,
+        )
 
     async def close(self) -> None:
         """Close all providers."""

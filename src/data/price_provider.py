@@ -1,19 +1,28 @@
 """
-Jupiter Price API Integration.
+Price Provider System with Fallback Hierarchy.
 
-Provides token price data from Jupiter Price API with:
-- In-memory caching (configurable TTL)
-- Rate limiting (10 req/s default)
-- Batch support for multiple tokens
-- Retry logic with exponential backoff
+Provides token price data with:
+- Jupiter V3 API (primary) with free/pro tier support
+- Birdeye API (fallback)
+- Pool-implied price from DEX reserves (last resort)
+- In-memory caching with configurable TTL
+- Rate limiting
+- Computed confidence based on source/liquidity
+
+Jupiter API Tiers:
+- Free: https://lite-api.jup.ag (rate limited)
+- Pro: https://api.jup.ag (requires API key)
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from enum import Enum
+from typing import Literal, Any, TYPE_CHECKING
 
 import httpx
 import structlog
@@ -21,12 +30,23 @@ import structlog
 from ..core.config import settings
 from ..core.types import TokenMint
 
+if TYPE_CHECKING:
+    from ..liquidity.pools import LiquidityFetcher, PoolInfo
+
 logger = structlog.get_logger()
+
+
+class PriceConfidence(str, Enum):
+    """Price confidence levels based on source and liquidity."""
+    HIGH = "high"       # >$1M liquidity, primary source
+    MEDIUM = "medium"   # >$10K liquidity, or fallback source
+    LOW = "low"         # <$10K liquidity, or pool-implied
+    NONE = "none"       # Price unavailable
 
 
 @dataclass(frozen=True)
 class PriceData:
-    """Token price data from Jupiter API.
+    """Token price data from any provider.
 
     Attributes
     ----------
@@ -36,20 +56,26 @@ class PriceData:
         Current price in USD.
     price_change_24h_pct : float | None
         24-hour price change percentage (if available).
-    confidence : str
-        Price confidence level: "high", "medium", or "low".
+    confidence : PriceConfidence
+        Price confidence level computed from source and liquidity.
     source : str
-        Data source identifier.
+        Data source identifier (jupiter, birdeye, pool_implied).
     fetched_at : datetime
         Timestamp when price was fetched.
+    liquidity_usd : float | None
+        Liquidity backing this price (for confidence calculation).
+    payload_hash : str | None
+        Hash of raw provider response for audit trail.
     """
 
     mint: str
     price_usd: float
     price_change_24h_pct: float | None
-    confidence: Literal["high", "medium", "low"]
+    confidence: PriceConfidence
     source: str
     fetched_at: datetime
+    liquidity_usd: float | None = None
+    payload_hash: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
@@ -57,9 +83,10 @@ class PriceData:
             "mint": self.mint,
             "price_usd": self.price_usd,
             "price_change_24h_pct": self.price_change_24h_pct,
-            "confidence": self.confidence,
+            "confidence": self.confidence.value,
             "source": self.source,
             "fetched_at": self.fetched_at.isoformat(),
+            "liquidity_usd": self.liquidity_usd,
         }
 
 
@@ -71,45 +98,119 @@ class CacheEntry:
     expires_at: datetime
 
 
-class JupiterPriceProvider:
+class PriceProvider(ABC):
+    """Abstract base class for price providers."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Provider name."""
+        ...
+
+    @property
+    @abstractmethod
+    def priority(self) -> int:
+        """Provider priority (lower = higher priority)."""
+        ...
+
+    @abstractmethod
+    async def get_price(self, mint: str) -> PriceData | None:
+        """Get price for a single token."""
+        ...
+
+    @abstractmethod
+    async def get_prices_batch(self, mints: list[str]) -> dict[str, PriceData]:
+        """Get prices for multiple tokens."""
+        ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close the provider."""
+        ...
+
+
+def _compute_payload_hash(data: dict) -> str:
+    """Compute hash of API response for audit trail."""
+    import json
+    content = json.dumps(data, sort_keys=True)
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def _compute_confidence(
+    liquidity_usd: float | None,
+    source: str,
+) -> PriceConfidence:
+    """Compute price confidence from liquidity and source.
+
+    High: liquidity > $1M from primary source
+    Medium: liquidity > $10K from any source, or fallback source
+    Low: liquidity <= $10K or pool-implied
     """
-    Jupiter Price API provider with caching and rate limiting.
+    # Pool-implied is always low confidence
+    if source == "pool_implied":
+        return PriceConfidence.LOW
+
+    if liquidity_usd is None:
+        return PriceConfidence.MEDIUM
+
+    if liquidity_usd >= 1_000_000:
+        return PriceConfidence.HIGH
+    elif liquidity_usd >= 10_000:
+        return PriceConfidence.MEDIUM
+    else:
+        return PriceConfidence.LOW
+
+
+class JupiterPriceProvider(PriceProvider):
+    """
+    Jupiter Price API V3 provider with free/pro tier support.
 
     Features:
-    - In-memory cache with configurable TTL (default 60s)
-    - Rate limiting to stay within API limits (10 req/s)
-    - Batch support for fetching multiple tokens
+    - Config-driven endpoints (lite-api.jup.ag or api.jup.ag)
+    - API key support for pro tier
+    - In-memory cache with configurable TTL
+    - Rate limiting to stay within API limits
     - Automatic retry with exponential backoff
-
-    Usage:
-        provider = JupiterPriceProvider()
-        price = await provider.get_price("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-        if price:
-            print(f"USDC: ${price.price_usd}")
     """
 
-    API_URL = "https://api.jup.ag/price/v3"
-    RATE_LIMIT_PER_SECOND = 10
     DEFAULT_CACHE_TTL = 60  # seconds
+    FREE_RATE_LIMIT = 10  # requests per second (lite-api)
+    PRO_RATE_LIMIT = 100  # requests per second (api.jup.ag with key)
 
     def __init__(
         self,
         cache_ttl: int | None = None,
         rate_limit: int | None = None,
     ):
-        """Initialize the price provider.
+        """Initialize the Jupiter price provider.
 
         Parameters
         ----------
         cache_ttl : int | None
             Cache TTL in seconds. Defaults to settings or 60s.
         rate_limit : int | None
-            Max requests per second. Defaults to 10.
+            Max requests per second. Auto-detected based on API key.
         """
-        self._cache_ttl = cache_ttl or getattr(
-            settings, "price_cache_ttl_seconds", self.DEFAULT_CACHE_TTL
-        )
-        self._rate_limit = rate_limit or self.RATE_LIMIT_PER_SECOND
+        self._base_url = settings.jupiter_price_base_url
+        self._path = settings.jupiter_price_path
+        self._api_key = settings.jupiter_api_key
+
+        # Validate config
+        if self._api_key and "lite-api" in self._base_url:
+            logger.warning(
+                "jupiter_config_mismatch",
+                msg="API key provided but using lite-api URL. Switch to api.jup.ag for pro tier.",
+            )
+
+        self._cache_ttl = cache_ttl or settings.price_cache_ttl_seconds
+
+        # Rate limit based on tier
+        if rate_limit:
+            self._rate_limit = rate_limit
+        elif self._api_key:
+            self._rate_limit = self.PRO_RATE_LIMIT
+        else:
+            self._rate_limit = self.FREE_RATE_LIMIT
 
         # In-memory cache
         self._cache: dict[str, CacheEntry] = {}
@@ -121,15 +222,40 @@ class JupiterPriceProvider:
         # HTTP client (lazy initialization)
         self._client: httpx.AsyncClient | None = None
 
+        logger.info(
+            "jupiter_provider_initialized",
+            base_url=self._base_url,
+            has_api_key=bool(self._api_key),
+            rate_limit=self._rate_limit,
+            cache_ttl=self._cache_ttl,
+        )
+
+    @property
+    def name(self) -> str:
+        return "jupiter"
+
+    @property
+    def priority(self) -> int:
+        return 1  # Primary provider
+
+    @property
+    def api_url(self) -> str:
+        """Full API URL."""
+        return f"{self._base_url}{self._path}"
+
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:
+            headers = {
+                "Accept": "application/json",
+                "User-Agent": "SHI/1.0",
+            }
+            if self._api_key:
+                headers["Authorization"] = f"Bearer {self._api_key}"
+
             self._client = httpx.AsyncClient(
                 timeout=30.0,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "SHI/1.0",
-                },
+                headers=headers,
             )
         return self._client
 
@@ -183,21 +309,7 @@ class JupiterPriceProvider:
         mint: str,
         skip_cache: bool = False,
     ) -> PriceData | None:
-        """
-        Get price for a single token.
-
-        Parameters
-        ----------
-        mint : str
-            Token mint address.
-        skip_cache : bool
-            If True, bypass cache and fetch fresh data.
-
-        Returns
-        -------
-        PriceData | None
-            Price data if available, None otherwise.
-        """
+        """Get price for a single token."""
         # Check cache first
         if not skip_cache:
             cached = self._get_cached(mint)
@@ -214,21 +326,7 @@ class JupiterPriceProvider:
         mints: list[str],
         skip_cache: bool = False,
     ) -> dict[str, PriceData]:
-        """
-        Get prices for multiple tokens in a single request.
-
-        Parameters
-        ----------
-        mints : list[str]
-            List of token mint addresses.
-        skip_cache : bool
-            If True, bypass cache and fetch fresh data.
-
-        Returns
-        -------
-        dict[str, PriceData]
-            Map of mint -> PriceData for found tokens.
-        """
+        """Get prices for multiple tokens in a single request."""
         if not mints:
             return {}
 
@@ -262,36 +360,47 @@ class JupiterPriceProvider:
 
             logger.debug(
                 "fetching_prices",
+                provider="jupiter",
                 mint_count=len(mints_to_fetch),
                 first_mint=mints_to_fetch[0][:8] if mints_to_fetch else None,
             )
 
             response = await client.get(
-                self.API_URL,
+                self.api_url,
                 params={"ids": ids_param},
             )
+
+            # Handle rate limiting
+            if response.status_code == 429:
+                logger.warning("jupiter_rate_limited", status=429)
+                return result
+
             response.raise_for_status()
 
             data = response.json()
             now = datetime.now(timezone.utc)
+            payload_hash = _compute_payload_hash(data)
 
-            # Parse v3 response format (direct dict, not nested under "data")
+            # Parse V3 response format (direct dict, not nested under "data")
             for mint in mints_to_fetch:
                 token_data = data.get(mint)
                 if token_data is None:
                     logger.debug("price_not_found", mint=mint[:8])
                     continue
 
-                # v3 uses "usdPrice" instead of "price"
+                # V3 uses "usdPrice" instead of "price"
                 price = token_data.get("usdPrice")
                 if price is None:
                     continue
 
-                # v3 includes 24h price change
+                # V3 includes 24h price change
                 price_change_24h = token_data.get("priceChange24h")
 
-                # Determine confidence based on liquidity
-                confidence = self._determine_confidence(token_data)
+                # V3 includes liquidity
+                liquidity = token_data.get("liquidity")
+
+                # Compute confidence from liquidity
+                confidence = _compute_confidence(liquidity, "jupiter")
 
                 price_obj = PriceData(
                     mint=mint,
@@ -300,6 +409,8 @@ class JupiterPriceProvider:
                     confidence=confidence,
                     source="jupiter",
                     fetched_at=now,
+                    liquidity_usd=float(liquidity) if liquidity else None,
+                    payload_hash=payload_hash,
                 )
 
                 # Cache and add to result
@@ -307,9 +418,9 @@ class JupiterPriceProvider:
                 result[mint] = price_obj
 
             logger.info(
-                "prices_fetched",
+                "jupiter_prices_fetched",
                 requested=len(mints_to_fetch),
-                found=len(result) - sum(1 for m in mints if m in result and self._get_cached(m)),
+                found=len([m for m in mints_to_fetch if m in result]),
                 total=len(result),
             )
 
@@ -326,30 +437,6 @@ class JupiterPriceProvider:
 
         return result
 
-    def _determine_confidence(self, token_data: dict) -> Literal["high", "medium", "low"]:
-        """Determine price confidence based on API response data.
-
-        Uses liquidity as confidence indicator:
-        - High: liquidity > $1M
-        - Medium: liquidity > $10K
-        - Low: liquidity <= $10K or unknown
-        """
-        # v3 API returns liquidity directly
-        liquidity = token_data.get("liquidity")
-
-        if liquidity is not None:
-            if liquidity >= 1_000_000:  # $1M+
-                return "high"
-            elif liquidity >= 10_000:  # $10K+
-                return "medium"
-            else:
-                return "low"
-
-        # Fallback: check if price exists
-        if token_data.get("usdPrice") is not None:
-            return "medium"
-        return "low"
-
     async def close(self) -> None:
         """Close the HTTP client."""
         if self._client:
@@ -359,12 +446,308 @@ class JupiterPriceProvider:
     def clear_cache(self) -> None:
         """Clear the price cache."""
         self._cache.clear()
-        logger.info("price_cache_cleared")
+        logger.info("jupiter_cache_cleared")
 
     @property
     def cache_size(self) -> int:
         """Get current cache size."""
         return len(self._cache)
+
+
+class BirdeyePriceProvider(PriceProvider):
+    """Birdeye API price provider (fallback)."""
+
+    API_URL = "https://public-api.birdeye.so/defi/price"
+
+    def __init__(self, api_key: str | None = None):
+        self._api_key = api_key or settings.birdeye_api_key
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def name(self) -> str:
+        return "birdeye"
+
+    @property
+    def priority(self) -> int:
+        return 2  # Secondary provider
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            headers = {"Accept": "application/json"}
+            if self._api_key:
+                headers["X-API-KEY"] = self._api_key
+            self._client = httpx.AsyncClient(timeout=30.0, headers=headers)
+        return self._client
+
+    async def get_price(self, mint: str) -> PriceData | None:
+        """Get price from Birdeye."""
+        if not self._api_key:
+            logger.debug("birdeye_no_api_key")
+            return None
+
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                self.API_URL,
+                params={"address": mint},
+            )
+
+            if response.status_code == 429:
+                logger.warning("birdeye_rate_limited")
+                return None
+
+            response.raise_for_status()
+            data = response.json()
+
+            if not data.get("success"):
+                return None
+
+            price_data = data.get("data", {})
+            price = price_data.get("value")
+            if price is None:
+                return None
+
+            liquidity = price_data.get("liquidity")
+            confidence = _compute_confidence(liquidity, "birdeye")
+
+            return PriceData(
+                mint=mint,
+                price_usd=float(price),
+                price_change_24h_pct=price_data.get("priceChange24h"),
+                confidence=confidence,
+                source="birdeye",
+                fetched_at=datetime.now(timezone.utc),
+                liquidity_usd=float(liquidity) if liquidity else None,
+                payload_hash=_compute_payload_hash(data),
+            )
+
+        except Exception as e:
+            logger.warning("birdeye_fetch_failed", error=str(e))
+            return None
+
+    async def get_prices_batch(self, mints: list[str]) -> dict[str, PriceData]:
+        """Birdeye doesn't support batch - fetch individually."""
+        results = {}
+        for mint in mints:
+            price = await self.get_price(mint)
+            if price:
+                results[mint] = price
+        return results
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+
+class PoolImpliedPriceProvider(PriceProvider):
+    """Derive price from DEX pool reserves (last resort fallback)."""
+
+    # SOL mint for price derivation
+    SOL_MINT = "So11111111111111111111111111111111111111112"
+    USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+    def __init__(self, liquidity_fetcher: "LiquidityFetcher | None" = None):
+        self._liquidity_fetcher = liquidity_fetcher
+        self._sol_price: float | None = None
+        self._sol_price_fetched_at: datetime | None = None
+
+    @property
+    def name(self) -> str:
+        return "pool_implied"
+
+    @property
+    def priority(self) -> int:
+        return 3  # Tertiary provider
+
+    async def _get_sol_price(self, jupiter: JupiterPriceProvider) -> float | None:
+        """Get SOL price for conversion."""
+        # Cache SOL price for 5 minutes
+        if (
+            self._sol_price is not None
+            and self._sol_price_fetched_at is not None
+            and (datetime.now(timezone.utc) - self._sol_price_fetched_at).seconds < 300
+        ):
+            return self._sol_price
+
+        sol_data = await jupiter.get_price(self.SOL_MINT)
+        if sol_data:
+            self._sol_price = sol_data.price_usd
+            self._sol_price_fetched_at = datetime.now(timezone.utc)
+            return self._sol_price
+
+        return None
+
+    async def get_price(
+        self,
+        mint: str,
+        jupiter: JupiterPriceProvider | None = None,
+    ) -> PriceData | None:
+        """Derive price from pool reserves."""
+        if not settings.enable_pool_implied_price:
+            return None
+
+        if self._liquidity_fetcher is None:
+            from ..liquidity.pools import LiquidityFetcher
+            self._liquidity_fetcher = LiquidityFetcher()
+
+        try:
+            pool = await self._liquidity_fetcher.get_deepest_pool(mint)
+            if not pool:
+                return None
+
+            # Determine which side is the token
+            if pool.token_a_mint == mint:
+                token_reserve = pool.token_a_reserve_ui
+                other_reserve = pool.token_b_reserve_ui
+                other_mint = pool.token_b_mint
+            else:
+                token_reserve = pool.token_b_reserve_ui
+                other_reserve = pool.token_a_reserve_ui
+                other_mint = pool.token_a_mint
+
+            if token_reserve == 0:
+                return None
+
+            # Price in terms of other token
+            price_in_other = other_reserve / token_reserve
+
+            # Convert to USD
+            price_usd: float | None = None
+
+            if other_mint == self.USDC_MINT:
+                price_usd = price_in_other
+            elif other_mint == self.SOL_MINT and jupiter:
+                sol_price = await self._get_sol_price(jupiter)
+                if sol_price:
+                    price_usd = price_in_other * sol_price
+
+            if price_usd is None:
+                return None
+
+            return PriceData(
+                mint=mint,
+                price_usd=price_usd,
+                price_change_24h_pct=None,  # Not available from pools
+                confidence=PriceConfidence.LOW,  # Pool-implied is always low
+                source="pool_implied",
+                fetched_at=datetime.now(timezone.utc),
+                liquidity_usd=pool.liquidity_usd,
+                payload_hash=None,
+            )
+
+        except Exception as e:
+            logger.warning("pool_implied_price_failed", mint=mint[:8], error=str(e))
+            return None
+
+    async def get_prices_batch(self, mints: list[str]) -> dict[str, PriceData]:
+        """Fetch pool-implied prices individually."""
+        results = {}
+        jupiter = JupiterPriceProvider()
+        try:
+            for mint in mints:
+                price = await self.get_price(mint, jupiter=jupiter)
+                if price:
+                    results[mint] = price
+        finally:
+            await jupiter.close()
+        return results
+
+    async def close(self) -> None:
+        if self._liquidity_fetcher:
+            await self._liquidity_fetcher.close()
+
+
+class PriceProviderChain:
+    """
+    Chain of price providers with fallback hierarchy.
+
+    Order: Jupiter → Birdeye → Pool-implied
+    """
+
+    def __init__(
+        self,
+        providers: list[PriceProvider] | None = None,
+    ):
+        if providers:
+            self._providers = sorted(providers, key=lambda p: p.priority)
+        else:
+            # Default chain
+            self._providers = [
+                JupiterPriceProvider(),
+                BirdeyePriceProvider(),
+                PoolImpliedPriceProvider(),
+            ]
+
+        logger.info(
+            "price_provider_chain_initialized",
+            providers=[p.name for p in self._providers],
+        )
+
+    async def get_price(self, mint: str) -> PriceData | None:
+        """Get price, falling through providers until success."""
+        for provider in self._providers:
+            try:
+                price = await provider.get_price(mint)
+                if price is not None:
+                    logger.debug(
+                        "price_fetched_from_provider",
+                        mint=mint[:8],
+                        provider=provider.name,
+                    )
+                    return price
+            except Exception as e:
+                logger.warning(
+                    "provider_failed",
+                    provider=provider.name,
+                    error=str(e),
+                )
+                continue
+
+        logger.warning("all_price_providers_failed", mint=mint[:8])
+        return None
+
+    async def get_prices_batch(
+        self,
+        mints: list[str],
+    ) -> dict[str, PriceData]:
+        """Get prices with fallback for missing tokens."""
+        results: dict[str, PriceData] = {}
+        remaining_mints = list(mints)
+
+        for provider in self._providers:
+            if not remaining_mints:
+                break
+
+            try:
+                prices = await provider.get_prices_batch(remaining_mints)
+                results.update(prices)
+
+                # Remove found mints from remaining
+                remaining_mints = [m for m in remaining_mints if m not in prices]
+
+                if prices:
+                    logger.debug(
+                        "batch_prices_from_provider",
+                        provider=provider.name,
+                        found=len(prices),
+                        remaining=len(remaining_mints),
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "batch_provider_failed",
+                    provider=provider.name,
+                    error=str(e),
+                )
+                continue
+
+        return results
+
+    async def close(self) -> None:
+        """Close all providers."""
+        for provider in self._providers:
+            await provider.close()
 
 
 # Well-known token mints for testing

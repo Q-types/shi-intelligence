@@ -599,6 +599,71 @@ class EntityMembership(Base):
     )
 
 
+# ============================================================================
+# Price Intelligence Models (Sprint 7)
+# ============================================================================
+
+
+class TokenPriceSnapshot(Base):
+    """
+    Price snapshot for audit trail and historical analysis.
+
+    Stores price data at time of fetch for:
+    - Reproducibility (what the model saw)
+    - Historical price-holder divergence analysis
+    - Backtesting validation
+    - PnL calculations at snapshot time
+    """
+
+    __tablename__ = "token_price_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mint: Mapped[str] = mapped_column(String(44), index=True)
+    price_usd: Mapped[float] = mapped_column(Float)
+    price_change_24h_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Source and confidence
+    source: Mapped[str] = mapped_column(String(20))  # jupiter, birdeye, pool_implied
+    confidence: Mapped[str] = mapped_column(String(10))  # high, medium, low, none
+    liquidity_usd: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Audit trail
+    provider_payload_hash: Mapped[Optional[str]] = mapped_column(String(16))
+    fetched_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), index=True)
+
+    __table_args__ = (
+        Index("ix_token_price_snapshots_mint_time", "mint", "fetched_at"),
+    )
+
+
+class LiquiditySnapshot(Base):
+    """
+    Liquidity snapshot for rolling average calculations.
+
+    Stores liquidity data to compute:
+    - liquidity_usd_1h_avg
+    - liquidity_usd_24h_avg
+    - liquidity_depth_confidence
+    """
+
+    __tablename__ = "liquidity_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mint: Mapped[str] = mapped_column(String(44), index=True)
+    liquidity_usd: Mapped[float] = mapped_column(Float)
+
+    # Source info
+    pool_address: Mapped[Optional[str]] = mapped_column(String(44))
+    dex: Mapped[Optional[str]] = mapped_column(String(20))  # raydium, orca
+
+    # Timestamp
+    fetched_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), index=True)
+
+    __table_args__ = (
+        Index("ix_liquidity_snapshots_mint_time", "mint", "fetched_at"),
+    )
+
+
 class WalletReputation(Base):
     """
     Cross-token reputation score for wallets.

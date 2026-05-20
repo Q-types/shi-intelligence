@@ -77,5 +77,7 @@ credentials.json
 # Jupyter
 .ipynb_checkpoints/
 
-# SWEENEE (separate repo)
-sweenee/
+# SWEENEE data files (keep code, ignore caches)
+sweenee/data/*.db
+sweenee/data/*.sqlite
+sweenee/.streamlit/

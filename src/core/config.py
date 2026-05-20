@@ -188,5 +188,25 @@ class Settings(BaseSettings):
         description="Minimum confidence to override archetype with coordinated_cluster",
     )
 
+    # Probability Calibration Settings
+    # Goal: produce probabilities that are honest, stable, and decision-useful
+    # Current hazard model has C-index ~0.88 but calibration slope ~2.0 (ideal: 1.0)
+    use_probability_calibration: bool = Field(
+        default=True,
+        description="Apply post-hoc calibration to hazard model probabilities",
+    )
+    calibration_method: str = Field(
+        default="isotonic",
+        description="Calibration method: 'isotonic', 'platt', 'beta', 'regime_specific'",
+    )
+    use_regime_specific_calibration: bool = Field(
+        default=False,
+        description="Use different calibrators per token regime (requires adequate samples per regime)",
+    )
+    calibration_min_samples: int = Field(
+        default=50,
+        description="Minimum samples required for regime-specific calibration",
+    )
+
 
 settings = Settings()
