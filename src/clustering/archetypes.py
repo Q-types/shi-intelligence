@@ -145,13 +145,21 @@ class WalletFeatureVector:
     eigenvector_centrality: float
     shared_funder_count: int
 
-    # Weighted graph features (new)
+    # Advanced centrality metrics (new)
+    pagerank: float | None = None  # PageRank importance score
+    betweenness_centrality: float | None = None  # Bridge/hub detection
+
+    # Weighted graph features
     total_funding_received: float | None = None  # Total SOL received as funding
     largest_funder_share: float | None = None  # % of funding from largest funder
     funding_hhi: float | None = None  # Herfindahl-Hirschman Index for funding concentration
     funding_burst_score: float | None = None  # Temporal burstiness of funding
     weighted_in_degree: float | None = None  # Sum of incoming edge weights
     weighted_out_degree: float | None = None  # Sum of outgoing edge weights
+
+    # Temporal coordination features (new)
+    temporal_sync_score: float | None = None  # Synchronized funding detection
+    funding_time_spread_hours: float | None = None  # Time spread of funding events
 
     # Flags
     is_exchange: bool = False
@@ -184,22 +192,49 @@ class WalletFeatureVector:
     liquidity_depth_confidence: str | None = None  # high, medium, low
 
     def to_array(self) -> NDArray[np.float64]:
-        """Convert to numpy array for clustering."""
+        """
+        Convert to numpy array for clustering.
+
+        Includes weighted graph features for better coordination detection.
+        None values are replaced with 0.0 for clustering stability.
+        """
+        # Helper to safely convert None to 0.0
+        def safe(val: float | None) -> float:
+            return 0.0 if val is None else float(val)
+
         return np.array([
+            # Distribution (1 feature)
             self.share,
+            # Temporal (4 features)
             self.entry_time_relative,
             self.holding_duration,
             self.position_volatility,
+            safe(self.funding_time_spread_hours),
+            # Flow (2 features)
             self.delta_balance_7d,
             self.delta_balance_30d,
+            # Trade (4 features)
             self.trade_count,
             self.burstiness,
             self.swap_frequency,
             self.lp_interaction_ratio,
+            # Basic graph (4 features)
             self.in_degree,
             self.out_degree,
             self.eigenvector_centrality,
             self.shared_funder_count,
+            # Advanced centrality (2 features)
+            safe(self.pagerank),
+            safe(self.betweenness_centrality),
+            # Weighted graph (6 features) - CRITICAL for coordination detection
+            safe(self.total_funding_received),
+            safe(self.largest_funder_share),
+            safe(self.funding_hhi),
+            safe(self.funding_burst_score),
+            safe(self.weighted_in_degree),
+            safe(self.weighted_out_degree),
+            # Temporal coordination (1 feature)
+            safe(self.temporal_sync_score),
         ], dtype=np.float64)
 
 

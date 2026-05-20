@@ -30,12 +30,18 @@ class EmbeddingConfig:
     dimensions: int = 64
     walk_length: int = 30
     num_walks: int = 200
-    p: float = 1.0  # Return parameter
-    q: float = 1.0  # In-out parameter
+    p: float = 1.0  # Return parameter (low = local exploration)
+    q: float = 1.0  # In-out parameter (low = BFS-like, high = DFS-like)
     window: int = 10  # Context window for Word2Vec
     min_count: int = 1
     batch_words: int = 4
     workers: int = 4
+
+    # Weighted embeddings - uses edge amounts to bias random walks
+    # High-value funding relationships influence embeddings more
+    use_weights: bool = True
+    weight_key: str = "amount"  # Edge attribute containing weight
+    log_transform_weights: bool = True  # Apply log1p to weights (recommended for SOL amounts)
 
 
 @dataclass
@@ -77,6 +83,70 @@ class GraphEmbedder:
         self.embeddings: Dict[WalletAddress, np.ndarray] = {}
         self.embedding_id: Optional[str] = None
 
+    def _prepare_weighted_graph(self, nx_graph) -> tuple:
+        """
+        Prepare graph with normalized weights for Node2Vec.
+
+        Returns:
+            Tuple of (prepared_graph, weight_key_or_None)
+        """
+        if not self.config.use_weights:
+            return nx_graph, None
+
+        # Check if edges have the weight attribute
+        sample_edges = list(nx_graph.edges(data=True))[:10]
+        has_weights = any(
+            self.config.weight_key in data
+            for _, _, data in sample_edges
+        )
+
+        if not has_weights:
+            logger.warning(
+                "no_edge_weights_found",
+                weight_key=self.config.weight_key,
+                using_unweighted=True,
+            )
+            return nx_graph, None
+
+        # Create a copy to avoid modifying original
+        weighted_graph = nx_graph.copy()
+
+        # Process weights
+        weight_stats = {"min": float("inf"), "max": 0, "zero_count": 0}
+
+        for u, v, data in weighted_graph.edges(data=True):
+            raw_weight = data.get(self.config.weight_key, 0)
+
+            # Handle missing or invalid weights
+            if raw_weight is None or raw_weight <= 0:
+                weight_stats["zero_count"] += 1
+                # Use small positive weight instead of 0 (Node2Vec needs positive weights)
+                processed_weight = 0.001
+            else:
+                if self.config.log_transform_weights:
+                    # Log transform to handle large value ranges (lamports -> SOL)
+                    # log1p(x) = log(1 + x) is stable for small values
+                    processed_weight = np.log1p(float(raw_weight))
+                else:
+                    processed_weight = float(raw_weight)
+
+            # Track stats
+            weight_stats["min"] = min(weight_stats["min"], processed_weight)
+            weight_stats["max"] = max(weight_stats["max"], processed_weight)
+
+            # Set the standard 'weight' attribute that Node2Vec uses
+            data["weight"] = processed_weight
+
+        logger.info(
+            "edge_weights_prepared",
+            log_transformed=self.config.log_transform_weights,
+            weight_min=weight_stats["min"],
+            weight_max=weight_stats["max"],
+            zero_weight_edges=weight_stats["zero_count"],
+        )
+
+        return weighted_graph, "weight"
+
     def fit_transform(
         self,
         graph: FundingGraph,
@@ -84,6 +154,10 @@ class GraphEmbedder:
     ) -> Dict[WalletAddress, WalletEmbedding]:
         """
         Fit Node2Vec and generate embeddings.
+
+        Uses edge weights to bias random walks when use_weights=True.
+        High-value funding relationships influence embeddings more than
+        dust transfers, improving sybil cluster detection.
 
         Args:
             graph: Funding graph to embed
@@ -101,20 +175,24 @@ class GraphEmbedder:
             nodes=graph.num_vertices,
             edges=graph.num_edges,
             dimensions=self.config.dimensions,
+            use_weights=self.config.use_weights,
         )
 
-        # Get underlying NetworkX graph
+        # Get underlying NetworkX graph and prepare weights
         nx_graph = graph._graph
+        weighted_graph, weight_key = self._prepare_weighted_graph(nx_graph)
 
-        # Initialize Node2Vec
+        # Initialize Node2Vec with optional weighting
+        # When weight_key is set, Node2Vec uses edge weights to bias random walks
         self.model = Node2Vec(
-            nx_graph,
+            weighted_graph,
             dimensions=self.config.dimensions,
             walk_length=self.config.walk_length,
             num_walks=self.config.num_walks,
             p=self.config.p,
             q=self.config.q,
             workers=self.config.workers,
+            weight_key=weight_key,  # None for unweighted, "weight" for weighted
         )
 
         # Fit model

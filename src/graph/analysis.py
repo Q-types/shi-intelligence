@@ -33,6 +33,10 @@ class WalletGraphFeatures:
     shared_funder_count: int
     funding_tree_size: int
 
+    # Advanced centrality metrics
+    pagerank: float = 0.0  # PageRank importance score
+    betweenness_centrality: float = 0.0  # Bridge/hub detection (coordination hubs)
+
 
 def compute_graph_features(
     graph: FundingGraph,
@@ -40,6 +44,14 @@ def compute_graph_features(
 ) -> dict[WalletAddress, WalletGraphFeatures]:
     """
     Compute all graph features for a list of wallets.
+
+    Includes:
+    - Basic degree metrics
+    - Eigenvector centrality (influence)
+    - PageRank (importance, identifies key nodes)
+    - Betweenness centrality (bridge/hub detection for coordination)
+    - Community membership
+    - Shared funder count
 
     Args:
         graph: The funding graph
@@ -50,8 +62,36 @@ def compute_graph_features(
     """
     logger.info("computing_graph_features", wallet_count=len(wallets))
 
-    # Compute centrality once for all nodes
-    centrality = graph.compute_eigenvector_centrality()
+    # Get underlying NetworkX graph
+    nx_graph = graph._graph
+
+    # Compute centrality metrics once for all nodes
+    eigenvector_centrality = graph.compute_eigenvector_centrality()
+
+    # PageRank - identifies important nodes in funding flow
+    # Uses damping factor 0.85 (standard), personalized for token holders
+    try:
+        pagerank = nx.pagerank(nx_graph, alpha=0.85, max_iter=100)
+    except Exception as e:
+        logger.warning("pagerank_failed", error=str(e))
+        pagerank = {}
+
+    # Betweenness centrality - identifies bridge nodes (coordination hubs)
+    # These are nodes that connect different clusters - key for sybil detection
+    try:
+        # Use k-sampling for large graphs (faster)
+        if nx_graph.number_of_nodes() > 1000:
+            betweenness = nx.betweenness_centrality(
+                nx_graph,
+                k=min(500, nx_graph.number_of_nodes()),
+                normalized=True,
+                seed=42,
+            )
+        else:
+            betweenness = nx.betweenness_centrality(nx_graph, normalized=True)
+    except Exception as e:
+        logger.warning("betweenness_failed", error=str(e))
+        betweenness = {}
 
     # Find shared funders
     shared_funders = graph.find_shared_funders(wallets)
@@ -78,11 +118,20 @@ def compute_graph_features(
             wallet=wallet,
             in_degree=graph.get_in_degree(wallet),
             out_degree=graph.get_out_degree(wallet),
-            eigenvector_centrality=centrality.get(wallet, 0.0),
+            eigenvector_centrality=eigenvector_centrality.get(wallet, 0.0),
             community_id=wallet_to_community.get(wallet),
             shared_funder_count=wallet_shared_count.get(wallet, 0),
             funding_tree_size=len(ancestors),
+            pagerank=pagerank.get(wallet, 0.0),
+            betweenness_centrality=betweenness.get(wallet, 0.0),
         )
+
+    logger.info(
+        "graph_features_computed",
+        wallet_count=len(features),
+        with_pagerank=len([f for f in features.values() if f.pagerank > 0]),
+        with_betweenness=len([f for f in features.values() if f.betweenness_centrality > 0]),
+    )
 
     return features
 
