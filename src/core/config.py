@@ -175,5 +175,18 @@ class Settings(BaseSettings):
         description="Weight for graph embeddings in combined clustering",
     )
 
+    # Coordination Detection Thresholds
+    # IMPORTANT: shared_funder_count >= 2 is too permissive on Solana
+    # Semantic audit found 77% of wallets meet this threshold
+    # Recommended: 5-7 for meaningful coordination detection
+    coordination_shared_funder_threshold: int = Field(
+        default=5,
+        description="Minimum shared_funder_count to trigger coordination override (2 is too low for Solana)",
+    )
+    coordination_confidence_threshold: float = Field(
+        default=0.7,
+        description="Minimum confidence to override archetype with coordinated_cluster",
+    )
+
 
 settings = Settings()

@@ -14,6 +14,8 @@ import numpy as np
 from numpy.typing import NDArray
 import structlog
 
+from ..core.config import settings
+
 logger = structlog.get_logger()
 
 
@@ -74,8 +76,11 @@ ARCHETYPES: dict[Archetype, ArchetypeDefinition] = {
         description="Shared funders + temporal synchronization",
         required_features=("shared_funder_count", "entry_time_relative"),
         feature_thresholds={
-            "shared_funder_count": (">=", 1),  # At least one shared funder
-            # Temporal sync checked via clustering
+            # IMPORTANT: shared_funder_count >= 1 was too permissive on Solana
+            # 77% of wallets had >= 2 shared funders, 44% had >= 5
+            # Use 5 as minimum for meaningful coordination signal
+            "shared_funder_count": (">=", 5),  # Significant coordination threshold
+            # Temporal sync still checked via clustering
         },
     ),
     Archetype.LIQUIDITY_ACTOR: ArchetypeDefinition(
@@ -508,22 +513,28 @@ def cluster_wallets_with_diagnostics(
             cluster_confidence_adj=confidence_adj,
         )
 
-        # Override to COORDINATED_CLUSTER if shared funders detected in cluster
+        # Override to COORDINATED_CLUSTER if significant shared funders detected in cluster
+        # IMPORTANT: Threshold is configurable - default 2 is too permissive on Solana
+        # Semantic audit found 77% of wallets have shared_funder_count >= 2
+        # Recommended: 5-7 for meaningful coordination detection
+        coord_threshold = settings.coordination_shared_funder_threshold
+        coord_confidence = settings.coordination_confidence_threshold
+
         if (
-            features.shared_funder_count >= 2
+            features.shared_funder_count >= coord_threshold
             and diagnostics is not None
             and diagnostics.labels[i] >= 0  # Not noise
         ):
             # Update scores to reflect coordinated behavior
             assignment.all_scores[Archetype.COORDINATED_CLUSTER] = max(
                 assignment.all_scores.get(Archetype.COORDINATED_CLUSTER, 0),
-                0.8,
+                coord_confidence,
             )
-            if assignment.primary_confidence < 0.8:
+            if assignment.primary_confidence < coord_confidence:
                 assignment = MultiScoreAssignment(
                     wallet=features.wallet,
                     primary_archetype=Archetype.COORDINATED_CLUSTER,
-                    primary_confidence=0.8,
+                    primary_confidence=coord_confidence,
                     all_scores=assignment.all_scores,
                     secondary_archetypes=[assignment.primary_archetype]
                     if assignment.primary_archetype != Archetype.UNKNOWN
@@ -601,14 +612,18 @@ def cluster_wallets(
             cluster_labels = clusterer.fit_predict(feature_matrix_scaled)
 
             # Mark coordinated clusters
+            # Use configurable threshold (default 2 is too permissive on Solana)
+            coord_threshold = settings.coordination_shared_funder_threshold
+            coord_confidence = settings.coordination_confidence_threshold
+
             for i, features in enumerate(shared_funder_wallets):
                 if cluster_labels[i] >= 0:  # Not noise
-                    # Override with coordinated cluster if confidence is high
-                    if features.shared_funder_count >= 2:
+                    # Override with coordinated cluster if shared funders exceed threshold
+                    if features.shared_funder_count >= coord_threshold:
                         assignments[features.wallet] = ArchetypeAssignment(
                             wallet=features.wallet,
                             archetype=Archetype.COORDINATED_CLUSTER,
-                            confidence=0.8,
+                            confidence=coord_confidence,
                             matching_features=["shared_funder_count", "cluster_membership"],
                             feature_values={
                                 "shared_funder_count": features.shared_funder_count,
