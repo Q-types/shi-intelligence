@@ -7,7 +7,7 @@ These are behavioral classifications only - not identity claims.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
@@ -140,6 +140,14 @@ class WalletFeatureVector:
     eigenvector_centrality: float
     shared_funder_count: int
 
+    # Weighted graph features (new)
+    total_funding_received: float | None = None  # Total SOL received as funding
+    largest_funder_share: float | None = None  # % of funding from largest funder
+    funding_hhi: float | None = None  # Herfindahl-Hirschman Index for funding concentration
+    funding_burst_score: float | None = None  # Temporal burstiness of funding
+    weighted_in_degree: float | None = None  # Sum of incoming edge weights
+    weighted_out_degree: float | None = None  # Sum of outgoing edge weights
+
     # Flags
     is_exchange: bool = False
 
@@ -147,6 +155,28 @@ class WalletFeatureVector:
     entry_price_usd: float | None = None
     current_price_usd: float | None = None
     unrealized_pnl_ratio: float = 0.0
+    unrealized_pnl_usd: float | None = None
+
+    # Price-derived intelligence features (Sprint 7)
+    price_change_1h_pct: float | None = None
+    price_change_24h_pct: float | None = None
+    price_change_7d_pct: float | None = None
+
+    # Price-holder divergence signals
+    # Positive = whale accumulating while price falling (bullish divergence)
+    # Negative = whale distributing while price rising (bearish divergence)
+    holder_growth_vs_price_change: float | None = None
+    whale_accumulation_vs_price_change: float | None = None
+
+    # Liquidity-adjusted risk signals
+    sell_pressure_vs_liquidity: float | None = None  # sell_pressure / liquidity_usd
+    unrealized_profit_concentration: float | None = None  # % of unrealized profit in top 10
+
+    # Liquidity smoothing
+    liquidity_usd_current: float | None = None
+    liquidity_usd_1h_avg: float | None = None
+    liquidity_usd_24h_avg: float | None = None
+    liquidity_depth_confidence: str | None = None  # high, medium, low
 
     def to_array(self) -> NDArray[np.float64]:
         """Convert to numpy array for clustering."""
@@ -177,6 +207,69 @@ class ArchetypeAssignment:
     confidence: float
     matching_features: list[str]
     feature_values: dict[str, float]
+
+
+@dataclass
+class MultiScoreAssignment:
+    """
+    Multi-score archetype assignment (upgraded from hard labels).
+
+    Keeps fixed PDR archetypes but computes scores for ALL archetypes,
+    enabling secondary labels and soft assignments.
+    """
+
+    wallet: str
+
+    # Primary assignment (highest scoring)
+    primary_archetype: Archetype
+    primary_confidence: float
+
+    # All archetype scores (sorted by confidence)
+    all_scores: dict[Archetype, float]
+
+    # Secondary labels (archetypes with confidence >= threshold)
+    secondary_archetypes: list[Archetype]
+
+    # Cluster-derived adjustments
+    cluster_status: str = "unknown"  # core, border, noise, unknown
+    cluster_confidence_adjustment: float = 0.0
+
+    # Feature match details
+    feature_matches: dict[Archetype, list[str]] = field(default_factory=dict)  # archetype -> matching features
+
+    @property
+    def adjusted_confidence(self) -> float:
+        """Primary confidence adjusted for cluster status."""
+        return max(0.0, min(1.0, self.primary_confidence + self.cluster_confidence_adjustment))
+
+    @property
+    def is_noise(self) -> bool:
+        """Check if wallet is in noise cluster."""
+        return self.cluster_status == "noise"
+
+    @property
+    def has_secondary(self) -> bool:
+        """Check if wallet has secondary archetype labels."""
+        return len(self.secondary_archetypes) > 0
+
+    def get_top_n_archetypes(self, n: int = 3) -> list[tuple[Archetype, float]]:
+        """Get top N archetypes by score."""
+        sorted_scores = sorted(
+            self.all_scores.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        return sorted_scores[:n]
+
+    def to_legacy_assignment(self) -> ArchetypeAssignment:
+        """Convert to legacy single-label ArchetypeAssignment for backward compatibility."""
+        return ArchetypeAssignment(
+            wallet=self.wallet,
+            archetype=self.primary_archetype,
+            confidence=self.adjusted_confidence,
+            matching_features=self.feature_matches.get(self.primary_archetype, []),
+            feature_values={},  # Would need to add feature values
+        )
 
 
 def _check_threshold(value: float, operator: str, threshold: float) -> bool:
@@ -253,6 +346,206 @@ def assign_archetype(features: WalletFeatureVector) -> ArchetypeAssignment:
         )
 
     return best_match
+
+
+def assign_archetype_multi_score(
+    features: WalletFeatureVector,
+    secondary_threshold: float = 0.4,
+    cluster_status: str = "unknown",
+    cluster_confidence_adj: float = 0.0,
+) -> MultiScoreAssignment:
+    """
+    Assign archetype with multi-score output.
+
+    Computes scores for ALL archetypes, enabling:
+    - Secondary labels for wallets matching multiple archetypes
+    - Soft assignments based on score distribution
+    - Cluster-aware confidence adjustment
+
+    Args:
+        features: Wallet feature vector
+        secondary_threshold: Minimum confidence for secondary labels
+        cluster_status: HDBSCAN cluster status (core, border, noise, unknown)
+        cluster_confidence_adj: Confidence adjustment from cluster diagnostics
+
+    Returns:
+        MultiScoreAssignment with all archetype scores
+    """
+    all_scores: dict[Archetype, float] = {}
+    feature_matches: dict[Archetype, list[str]] = {}
+
+    for archetype, definition in ARCHETYPES.items():
+        if archetype == Archetype.UNKNOWN:
+            continue
+
+        matching = []
+        total_checks = 0
+
+        for feature_name, (operator, threshold) in definition.feature_thresholds.items():
+            total_checks += 1
+
+            if hasattr(features, feature_name):
+                value = getattr(features, feature_name)
+                # Handle None values
+                if value is None:
+                    continue
+                if _check_threshold(float(value), operator, threshold):
+                    matching.append(feature_name)
+
+        # Calculate confidence as proportion of matched thresholds
+        confidence = len(matching) / total_checks if total_checks > 0 else 0.0
+
+        all_scores[archetype] = confidence
+        feature_matches[archetype] = matching
+
+    # Add UNKNOWN with score 0
+    all_scores[Archetype.UNKNOWN] = 0.0
+    feature_matches[Archetype.UNKNOWN] = []
+
+    # Determine primary archetype (highest score)
+    sorted_scores = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)
+    primary_archetype = sorted_scores[0][0]
+    primary_confidence = sorted_scores[0][1]
+
+    # If best score is too low, assign UNKNOWN
+    if primary_confidence < 0.5:
+        primary_archetype = Archetype.UNKNOWN
+        primary_confidence = 0.0
+
+    # Find secondary archetypes (above threshold, excluding primary)
+    secondary_archetypes = [
+        arch for arch, score in sorted_scores
+        if score >= secondary_threshold
+        and arch != primary_archetype
+        and arch != Archetype.UNKNOWN
+    ]
+
+    return MultiScoreAssignment(
+        wallet=features.wallet,
+        primary_archetype=primary_archetype,
+        primary_confidence=primary_confidence,
+        all_scores=all_scores,
+        secondary_archetypes=secondary_archetypes,
+        cluster_status=cluster_status,
+        cluster_confidence_adjustment=cluster_confidence_adj,
+        feature_matches=feature_matches,
+    )
+
+
+def cluster_wallets_with_diagnostics(
+    features_list: list[WalletFeatureVector],
+    min_cluster_size: int = 5,
+    return_diagnostics: bool = True,
+) -> tuple[dict[str, MultiScoreAssignment], dict | None]:
+    """
+    Cluster wallets with full diagnostics and multi-score assignments.
+
+    Enhanced version of cluster_wallets that:
+    - Returns multi-score assignments instead of hard labels
+    - Includes HDBSCAN diagnostics
+    - Properly handles noise points
+
+    Args:
+        features_list: List of wallet feature vectors
+        min_cluster_size: Minimum cluster size for HDBSCAN
+        return_diagnostics: Whether to return clustering diagnostics
+
+    Returns:
+        (assignments_dict, diagnostics_dict or None)
+    """
+    if not features_list:
+        return {}, None
+
+    logger.info("clustering_wallets_with_diagnostics", count=len(features_list))
+
+    # Import diagnostics module
+    from .diagnostics import HDBSCANDiagnostics, ClusterStatus
+
+    # Build feature matrix
+    feature_matrix = np.array([f.to_array() for f in features_list])
+
+    # Handle NaN values for clustering
+    # Replace NaN with column medians for clustering only
+    col_medians = np.nanmedian(feature_matrix, axis=0)
+    for i in range(feature_matrix.shape[1]):
+        mask = np.isnan(feature_matrix[:, i])
+        feature_matrix[mask, i] = col_medians[i]
+
+    # Run HDBSCAN with diagnostics
+    hdbscan_diag = HDBSCANDiagnostics(
+        min_cluster_size=min_cluster_size,
+        metric="euclidean",
+        cluster_selection_method="eom",
+    )
+
+    try:
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        feature_matrix_scaled = scaler.fit_transform(feature_matrix)
+
+        diagnostics = hdbscan_diag.fit(feature_matrix_scaled)
+    except Exception as e:
+        logger.error("hdbscan_fit_failed", error=str(e))
+        diagnostics = None
+
+    # Assign archetypes with cluster info
+    assignments: dict[str, MultiScoreAssignment] = {}
+
+    for i, features in enumerate(features_list):
+        # Get cluster status and confidence adjustment
+        if diagnostics is not None:
+            wallet_info = hdbscan_diag.get_wallet_info(features.wallet, i)
+            cluster_status = wallet_info.cluster_status.value
+            confidence_adj = wallet_info.confidence_adjustment
+        else:
+            cluster_status = "unknown"
+            confidence_adj = 0.0
+
+        # Assign with multi-score
+        assignment = assign_archetype_multi_score(
+            features,
+            cluster_status=cluster_status,
+            cluster_confidence_adj=confidence_adj,
+        )
+
+        # Override to COORDINATED_CLUSTER if shared funders detected in cluster
+        if (
+            features.shared_funder_count >= 2
+            and diagnostics is not None
+            and diagnostics.labels[i] >= 0  # Not noise
+        ):
+            # Update scores to reflect coordinated behavior
+            assignment.all_scores[Archetype.COORDINATED_CLUSTER] = max(
+                assignment.all_scores.get(Archetype.COORDINATED_CLUSTER, 0),
+                0.8,
+            )
+            if assignment.primary_confidence < 0.8:
+                assignment = MultiScoreAssignment(
+                    wallet=features.wallet,
+                    primary_archetype=Archetype.COORDINATED_CLUSTER,
+                    primary_confidence=0.8,
+                    all_scores=assignment.all_scores,
+                    secondary_archetypes=[assignment.primary_archetype]
+                    if assignment.primary_archetype != Archetype.UNKNOWN
+                    else [],
+                    cluster_status=cluster_status,
+                    cluster_confidence_adjustment=confidence_adj,
+                    feature_matches=assignment.feature_matches,
+                )
+
+        assignments[features.wallet] = assignment
+
+    # Prepare diagnostics dict
+    diag_dict = diagnostics.to_dict() if diagnostics else None
+
+    logger.info(
+        "clustering_completed",
+        total_wallets=len(assignments),
+        noise_wallets=sum(1 for a in assignments.values() if a.is_noise),
+        with_secondary=sum(1 for a in assignments.values() if a.has_secondary),
+    )
+
+    return assignments, diag_dict
 
 
 def cluster_wallets(

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.data.price_provider import JupiterPriceProvider, PriceData
+from src.data.price_provider import JupiterPriceProvider, PriceData, PriceConfidence
 from src.liquidity.pools import LiquidityFetcher, PoolInfo
 from src.pipeline.orchestrator import AnalysisOrchestrator, AnalysisResult
 from src.pipeline.features import FeatureEngineer
@@ -28,7 +28,7 @@ class TestPriceIntegration:
             mint="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             price_usd=1.0,
             price_change_24h_pct=0.5,
-            confidence="high",
+            confidence=PriceConfidence.HIGH,
             source="jupiter",
             fetched_at=datetime.now(timezone.utc),
         )
@@ -247,7 +247,7 @@ class TestPriceLiquidityAPIIntegration:
             mint="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             price_usd=1.0,
             price_change_24h_pct=None,
-            confidence="high",
+            confidence=PriceConfidence.HIGH,
             source="jupiter",
             fetched_at=datetime.now(timezone.utc),
         )
