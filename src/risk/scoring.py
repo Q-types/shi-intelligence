@@ -3,11 +3,15 @@ Risk Scoring Functions.
 
 Computes token-level risk indicators per PDR Section 6.
 All scores are normalized against baseline datasets.
+
+Sprint 8 Extension:
+CANDIDATE features for PnL and profit extraction behaviour.
+These are NOT production defaults - controlled by feature flags.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Sequence
 
@@ -18,6 +22,171 @@ from ..core.types import MetricOutput
 from ..metrics.normalization import BaselineStatistics
 
 logger = structlog.get_logger()
+
+
+# ============================================================================
+# Sprint 8: Candidate Feature Structures (NOT production defaults)
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class PnLCandidateFeatures:
+    """
+    Sprint 8 CANDIDATE features for PnL-based risk assessment.
+
+    HARD RULES:
+    1. confidence_score is NEVER zero (min 0.1)
+    2. When confidence < threshold, show ranges not precise values
+    3. Separate realised from unrealised
+    4. Accounting method must be explicit
+    """
+
+    # Unrealised exposure
+    unrealised_pnl_pct: float | None = None
+    unrealised_pnl_confidence: float = 0.1  # Never zero
+
+    # Realised behaviour
+    realised_profit_rate: float | None = None
+    realised_profit_confidence: float = 0.1
+
+    # Exit efficiency
+    exit_efficiency: float | None = None  # exit_price / peak_price
+    exit_efficiency_confidence: float = 0.1
+
+    # Liquidity sensitivity
+    liquidity_sensitive_exit_score: float | None = None
+    liquidity_exit_confidence: float = 0.1
+
+    # Accounting method used
+    accounting_method: str = "fifo"
+
+    # Overall confidence (min of all components)
+    overall_confidence: float = 0.1
+
+    # Display flag - when False, show ranges not precise values
+    display_precise: bool = False
+
+    def to_dict(self) -> dict:
+        """Export with confidence-aware display."""
+        result = {
+            "accounting_method": self.accounting_method,
+            "overall_confidence": self.overall_confidence,
+            "display_precise": self.display_precise,
+        }
+
+        # Unrealised
+        if self.unrealised_pnl_pct is not None:
+            if self.display_precise:
+                result["unrealised_pnl_pct"] = self.unrealised_pnl_pct
+            else:
+                # Show range when low confidence
+                result["unrealised_pnl_range"] = _confidence_range(
+                    self.unrealised_pnl_pct, self.unrealised_pnl_confidence
+                )
+            result["unrealised_pnl_confidence"] = self.unrealised_pnl_confidence
+
+        # Realised
+        if self.realised_profit_rate is not None:
+            if self.display_precise:
+                result["realised_profit_rate"] = self.realised_profit_rate
+            else:
+                result["realised_profit_range"] = _confidence_range(
+                    self.realised_profit_rate, self.realised_profit_confidence
+                )
+            result["realised_profit_confidence"] = self.realised_profit_confidence
+
+        # Exit efficiency
+        if self.exit_efficiency is not None:
+            if self.display_precise:
+                result["exit_efficiency"] = self.exit_efficiency
+            else:
+                result["exit_efficiency_range"] = _confidence_range(
+                    self.exit_efficiency, self.exit_efficiency_confidence
+                )
+            result["exit_efficiency_confidence"] = self.exit_efficiency_confidence
+
+        # Liquidity sensitivity
+        if self.liquidity_sensitive_exit_score is not None:
+            result["liquidity_sensitive_exit_score"] = self.liquidity_sensitive_exit_score
+            result["liquidity_exit_confidence"] = self.liquidity_exit_confidence
+
+        return result
+
+
+def _confidence_range(value: float, confidence: float) -> tuple[float, float]:
+    """
+    Convert value to confidence-scaled range.
+
+    Lower confidence = wider range.
+    """
+    # Range width inversely proportional to confidence
+    width = (1 - confidence) * abs(value) * 2
+    return (value - width / 2, value + width / 2)
+
+
+def build_pnl_candidate_features(
+    unrealised_pnl_pct: float | None = None,
+    unrealised_confidence: float = 0.5,
+    realised_profit_rate: float | None = None,
+    realised_confidence: float = 0.5,
+    exit_efficiency: float | None = None,
+    exit_confidence: float = 0.5,
+    liquidity_sensitive_exit_score: float | None = None,
+    liquidity_confidence: float = 0.5,
+    accounting_method: str = "fifo",
+    min_confidence_for_display: float = 0.5,
+    confidence_floor: float = 0.1,
+) -> PnLCandidateFeatures:
+    """
+    Build PnLCandidateFeatures with hard rule enforcement.
+
+    Sprint 8 Hard Rules:
+    1. Confidence is NEVER zero (min 0.1)
+    2. When confidence < threshold, display_precise=False
+    3. Accounting method must be explicit
+
+    Args:
+        unrealised_pnl_pct: Unrealised PnL percentage
+        unrealised_confidence: Confidence in unrealised calculation
+        realised_profit_rate: Rate of realised profits
+        realised_confidence: Confidence in realised calculation
+        exit_efficiency: Exit price / peak price ratio
+        exit_confidence: Confidence in exit efficiency
+        liquidity_sensitive_exit_score: Liquidity-adjusted exit quality
+        liquidity_confidence: Confidence in liquidity calculation
+        accounting_method: Cost basis method used (fifo/lifo/weighted_average)
+        min_confidence_for_display: Threshold for precise display
+        confidence_floor: Minimum confidence (never zero)
+
+    Returns:
+        PnLCandidateFeatures with enforced hard rules
+    """
+    # Enforce confidence floor (Sprint 8 Hard Rule: never zero)
+    unrealised_conf = max(confidence_floor, unrealised_confidence)
+    realised_conf = max(confidence_floor, realised_confidence)
+    exit_conf = max(confidence_floor, exit_confidence)
+    liquidity_conf = max(confidence_floor, liquidity_confidence)
+
+    # Overall confidence is minimum of all components
+    confidences = [unrealised_conf, realised_conf, exit_conf, liquidity_conf]
+    overall_conf = min(confidences)
+
+    # Determine if we can display precise values
+    display_precise = overall_conf >= min_confidence_for_display
+
+    return PnLCandidateFeatures(
+        unrealised_pnl_pct=unrealised_pnl_pct,
+        unrealised_pnl_confidence=unrealised_conf,
+        realised_profit_rate=realised_profit_rate,
+        realised_profit_confidence=realised_conf,
+        exit_efficiency=exit_efficiency,
+        exit_efficiency_confidence=exit_conf,
+        liquidity_sensitive_exit_score=liquidity_sensitive_exit_score,
+        liquidity_exit_confidence=liquidity_conf,
+        accounting_method=accounting_method,
+        overall_confidence=overall_conf,
+        display_precise=display_precise,
+    )
 
 
 @dataclass
@@ -56,6 +225,10 @@ class RiskReport:
     baseline_version: str
     computed_at: datetime
 
+    # Sprint 8 CANDIDATE features (NOT production defaults)
+    # Only populated when use_pnl_features=True in config
+    pnl_candidate_features: PnLCandidateFeatures | None = None
+
     # Disclaimer
     disclaimer: str = (
         "All outputs are observational and probabilistic. "
@@ -64,7 +237,7 @@ class RiskReport:
 
     def to_dict(self) -> dict:
         """Export as dictionary."""
-        return {
+        result = {
             "mint": self.mint,
             "snapshot_timestamp": self.snapshot_timestamp.isoformat(),
             "metrics": {
@@ -96,6 +269,15 @@ class RiskReport:
             "computed_at": self.computed_at.isoformat(),
             "disclaimer": self.disclaimer,
         }
+
+        # Sprint 8: Add candidate features if present
+        if self.pnl_candidate_features is not None:
+            result["pnl_candidate_features"] = self.pnl_candidate_features.to_dict()
+            result["disclaimer"] += (
+                " Sprint 8 PnL features are CANDIDATE features under validation."
+            )
+
+        return result
 
 
 # Default weights for stability score (can be calibrated)
@@ -273,6 +455,7 @@ def generate_risk_report(
     baseline: BaselineStatistics,
     liquidity_depth: float | None = None,
     model_version: str = "1.0.0",
+    pnl_candidate_features: PnLCandidateFeatures | None = None,
 ) -> RiskReport:
     """
     Generate complete risk report for a token.
@@ -284,6 +467,7 @@ def generate_risk_report(
         baseline: Baseline statistics for normalization
         liquidity_depth: Optional pool liquidity
         model_version: Current model version
+        pnl_candidate_features: Sprint 8 CANDIDATE features (optional)
 
     Returns:
         Complete RiskReport
@@ -357,4 +541,5 @@ def generate_risk_report(
         model_version=model_version,
         baseline_version=baseline.version,
         computed_at=now,
+        pnl_candidate_features=pnl_candidate_features,
     )

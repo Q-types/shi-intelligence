@@ -268,5 +268,95 @@ class Settings(BaseSettings):
         description="Minimum samples required for regime-specific calibration",
     )
 
+    # =========================================================================
+    # Sprint 8: Realised vs Unrealised Behaviour Intelligence
+    # CANDIDATE FEATURES - NOT production defaults
+    # These features require validation before enabling in production
+    # =========================================================================
+    use_pnl_features: bool = Field(
+        default=False,
+        description="CANDIDATE: Enable PnL-based features in risk scoring (requires validation)",
+    )
+    use_profit_extraction_features: bool = Field(
+        default=False,
+        description="CANDIDATE: Enable profit extraction behavior features (requires validation)",
+    )
+    pnl_default_accounting_method: str = Field(
+        default="fifo",
+        description="Default accounting method for cost basis: 'fifo', 'lifo', 'weighted_average'",
+    )
+    pnl_min_confidence_for_display: float = Field(
+        default=0.5,
+        description="Minimum confidence score to display precise PnL values (show ranges below)",
+    )
+    pnl_confidence_floor: float = Field(
+        default=0.1,
+        description="Minimum confidence score (never zero per hard rules)",
+    )
+
+    # =========================================================================
+    # Sprint 9: Transfer/Sell Classification and PnL Validation
+    # HARD RULES:
+    # 1. Balance decrease alone is NOT a sell
+    # 2. Realised PnL requires sell confidence
+    # 3. LP actions must NOT be treated as sells
+    # 4. Transfers must NOT generate realised PnL unless later sale observed
+    # 5. CEX deposits are uncertain exits unless sale can be inferred
+    # 6. Low reliability PnL must NOT display precise values
+    # 7. All classifications must include confidence and evidence
+    # =========================================================================
+    use_exit_classifier: bool = Field(
+        default=True,
+        description="Enable exit event classification for accurate PnL computation",
+    )
+    use_transfer_chain_detection: bool = Field(
+        default=True,
+        description="Enable transfer chain detection for wallet migration identification",
+    )
+    use_lp_action_separation: bool = Field(
+        default=True,
+        description="Enable LP action separation to prevent treating LP actions as sells",
+    )
+    use_cex_deposit_detection: bool = Field(
+        default=True,
+        description="Enable CEX deposit detection for uncertain exit handling",
+    )
+    exit_min_sell_confidence_for_pnl: float = Field(
+        default=0.7,
+        description="Minimum sell confidence to compute realised PnL",
+    )
+    exit_min_transfer_confidence: float = Field(
+        default=0.5,
+        description="Minimum confidence for transfer classification",
+    )
+    exit_min_lp_confidence: float = Field(
+        default=0.6,
+        description="Minimum confidence for LP action classification",
+    )
+    cex_high_fan_in_threshold: int = Field(
+        default=100,
+        description="Fan-in count threshold for probable CEX address detection",
+    )
+    cex_very_high_fan_in_threshold: int = Field(
+        default=500,
+        description="Fan-in count threshold for high-confidence CEX detection",
+    )
+    transfer_chain_rapid_followup_seconds: int = Field(
+        default=300,
+        description="Time window (seconds) for rapid followup transfer detection",
+    )
+    transfer_chain_max_depth: int = Field(
+        default=5,
+        description="Maximum depth for transfer chain tracing",
+    )
+    pnl_reliability_min_for_precise: float = Field(
+        default=0.7,
+        description="Minimum PnL reliability score to display precise values",
+    )
+    pnl_reliability_min_for_range: float = Field(
+        default=0.4,
+        description="Minimum PnL reliability score to display range estimates",
+    )
+
 
 settings = Settings()
