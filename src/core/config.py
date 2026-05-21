@@ -188,6 +188,66 @@ class Settings(BaseSettings):
         description="Minimum confidence to override archetype with coordinated_cluster",
     )
 
+    # Multi-Evidence Coordination Detection
+    # CRITICAL: Temporal-only coordination FAILED null model validation (2026-05-21)
+    # 0 significant detections - cannot distinguish real coordination from noise
+    use_temporal_coordination: bool = Field(
+        default=False,
+        description="DISABLED: Temporal-only coordination failed null model validation. Do not enable without redesign.",
+    )
+    use_multi_evidence_coordination: bool = Field(
+        default=True,
+        description="Use multi-evidence coordination model (requires multiple independent signals)",
+    )
+
+    # Multi-evidence coordination requires >= min_evidence_types to classify
+    coordination_min_evidence_types: int = Field(
+        default=3,
+        description="Minimum number of independent evidence types required for coordination classification",
+    )
+    coordination_z_threshold: float = Field(
+        default=2.5,
+        description="Z-score threshold for coordination significance (higher = more conservative)",
+    )
+    coordination_p_threshold: float = Field(
+        default=0.01,
+        description="P-value threshold for coordination significance",
+    )
+    coordination_min_cluster_size: int = Field(
+        default=3,
+        description="Minimum cluster size for coordination classification",
+    )
+
+    # Coordination evidence weights (must sum to 1.0)
+    coordination_weight_shared_funder: float = Field(
+        default=0.25,
+        description="Weight for shared funder similarity in coordination score",
+    )
+    coordination_weight_funding_time: float = Field(
+        default=0.15,
+        description="Weight for funding time similarity in coordination score",
+    )
+    coordination_weight_funding_amount: float = Field(
+        default=0.10,
+        description="Weight for funding amount similarity in coordination score",
+    )
+    coordination_weight_buy_time: float = Field(
+        default=0.15,
+        description="Weight for first buy time similarity in coordination score",
+    )
+    coordination_weight_trade_sequence: float = Field(
+        default=0.10,
+        description="Weight for trade sequence similarity in coordination score",
+    )
+    coordination_weight_exit_timing: float = Field(
+        default=0.10,
+        description="Weight for exit timing similarity in coordination score",
+    )
+    coordination_weight_cross_token: float = Field(
+        default=0.15,
+        description="Weight for cross-token reuse in coordination score",
+    )
+
     # Probability Calibration Settings
     # Goal: produce probabilities that are honest, stable, and decision-useful
     # Current hazard model has C-index ~0.88 but calibration slope ~2.0 (ideal: 1.0)
