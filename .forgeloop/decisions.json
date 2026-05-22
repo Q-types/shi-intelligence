@@ -1,0 +1,37 @@
+[
+  {
+    "id": "DEC-0001",
+    "title": "Monitored deployment before training use",
+    "decision": "Deploy exit classifier in monitored mode and collect real classification evidence before using classifier outputs as ground truth for model training",
+    "status": "accepted",
+    "rationale": "Sprint 9 validation is rule-based and unit-test validation, not real-world classification validation. Need to measure precision, recall, false sell rate, false transfer rate, and unknown exit rate on actual transactions before trusting classifications as labels.",
+    "consequences": [
+      "Classifier outputs are observational only during monitoring period",
+      "No automated training pipelines until validation complete",
+      "Manual review required to build labelled dataset",
+      "Production deployment is controlled rollout not full launch"
+    ],
+    "source": "Architecture review",
+    "related_files": [],
+    "related_phase_id": "PHASE-0001",
+    "created_at": "2026-05-22T09:53:29.041629Z",
+    "updated_at": "2026-05-22T09:53:29.041645Z"
+  },
+  {
+    "id": "DEC-0002",
+    "title": "Alert thresholds for classifier anomalies",
+    "decision": "Configure alerts for: UNKNOWN_EXIT >20%, DEX_SELL proportion shift >2\u03c3, LP actions classified as sell, low-confidence events producing PnL",
+    "status": "accepted",
+    "rationale": "These thresholds catch the most dangerous failure modes: high unknown rate indicates incomplete taxonomy, distribution shifts indicate data drift, LP misclassification violates hard rules, low-confidence PnL violates reliability requirements.",
+    "consequences": [
+      "Operations team needs to respond to alerts",
+      "Thresholds may need tuning after initial deployment",
+      "False alerts possible during low-volume periods"
+    ],
+    "source": "Sprint 9 hard rules",
+    "related_files": [],
+    "related_phase_id": "PHASE-0001",
+    "created_at": "2026-05-22T09:53:30.072254Z",
+    "updated_at": "2026-05-22T09:53:30.072258Z"
+  }
+]

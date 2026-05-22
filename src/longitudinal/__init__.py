@@ -134,6 +134,31 @@ from .exit_classifier import (
     create_lp_action_detector,
     create_cex_deposit_detector,
 )
+from .exit_classifier_monitoring import (
+    ClassificationLogRecord,
+    ClassificationDistribution,
+    DistributionSnapshot,
+    AlertType,
+    MonitoringAlert,
+    MonitoringConfig,
+    ClassificationLogger,
+    DistributionDashboard,
+    AlertManager,
+    MonitoredExitClassifier,
+    create_monitored_classifier,
+    create_monitoring_config,
+)
+from .exit_validation_dataset import (
+    ValidationLabel,
+    ValidationStatus,
+    ValidationSample,
+    DatasetTargets,
+    DatasetProgress,
+    ValidationDatasetBuilder,
+    ValidationSampleCollector,
+    create_validation_dataset_builder,
+    create_sample_collector,
+)
 
 __all__ = [
     # Enums
@@ -239,4 +264,27 @@ __all__ = [
     "CEXDetectionConfig",
     "CEXDepositDetector",
     "create_cex_deposit_detector",
+    # Sprint 9.5: Monitoring
+    "ClassificationLogRecord",
+    "ClassificationDistribution",
+    "DistributionSnapshot",
+    "AlertType",
+    "MonitoringAlert",
+    "MonitoringConfig",
+    "ClassificationLogger",
+    "DistributionDashboard",
+    "AlertManager",
+    "MonitoredExitClassifier",
+    "create_monitored_classifier",
+    "create_monitoring_config",
+    # Sprint 9.5: Validation Dataset
+    "ValidationLabel",
+    "ValidationStatus",
+    "ValidationSample",
+    "DatasetTargets",
+    "DatasetProgress",
+    "ValidationDatasetBuilder",
+    "ValidationSampleCollector",
+    "create_validation_dataset_builder",
+    "create_sample_collector",
 ]
